@@ -3,16 +3,16 @@
 ## 部署步骤
 
 ### Linux (Ubuntu/Debian)
-\\\ash
+```bash
 chmod +x deploy.sh
 ./deploy.sh
-\\\
+```
 
 ### Windows Server
-\\\cmd
+```cmd
 pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000
-\\\
+```
 
 ## API 接口
 
@@ -25,9 +25,9 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | /api/admin/push_announcement | POST | 发布公告（管理员） |
 
 ## 发布新版本
-\\\ash
+```bash
 curl -X POST http://localhost:8000/api/admin/push_version -d "version=1.1.0&download_url=http://xxx/exe&changelog=修复了xxx"
-\\\
+```
 
 ## 数据库
 SQLite 文件：hanshuang.db（自动创建）

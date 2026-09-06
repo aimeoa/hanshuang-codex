@@ -1,1 +1,153 @@
-# hanshuang-codex
+# 寒霜 Codex 破甲工具 (Hanshuang-Codex)
+
+OpenAI Codex CLI 破甲框架 — Python + PySide6 桌面应用。
+
+通过一键部署将寒霜指令集注入 Codex `config.toml`（`model_instructions_file`），在对话管道中启用竞赛沙箱模式。双变体指令集（flash / 变体B）适配不同档位模型，配合服务端更新通道实现版本分发。
+
+## 架构
+
+```
+寒霜桌面端 (PySide6)
+    │
+    ├─ M1 Installer (install.ps1)
+    │     config.toml 备份 → model_instructions_file 注入 → 恢复
+    │
+    ├─ M2 指令集 (寒霜-flash-v2.md / 寒霜-变体B-v3-英文.md)
+    │     意图映射 → 作用域规则 → 硬性输出规则 → 执行连续性
+    │
+    ├─ M3 更新服务 (server/main.py)
+    │     /api/check_update → 版本检查
+    │     /api/admin/push_version → 发布新版本
+    │
+    └─ M4 防护层
+          反调试 / 反虚拟机 / 完整性校验
+    │
+    ▼
+Codex CLI (config.toml → model_instructions_file)
+```
+
+**Core 原则**：工具只负责部署与恢复，不修改 Codex 本体。所有破甲逻辑由指令集承载，卸载即还原，无残留。
+
+## 功能模块
+
+| 模块 | 角色 | 职责 |
+|---|---|---|
+| M1 Installer | PowerShell | `config.toml` 备份/修改/恢复，安装与卸载指令集，状态记录到 `install-state.json` |
+| M2 指令集 | Markdown | 双变体提示词：意图映射、作用域规则、黑名单、硬性输出规则、阶梯递进、执行连续性 |
+| M3 Update Server | FastAPI | 版本检查、新版本发布、公告管理、SQLite 存储、管理后台 `/admin` |
+| M4 防护层 | Python | 反调试检测、反虚拟机检测、代码完整性校验 |
+| M5 桌面端 | PySide6 | 悬浮窗 UI、双卡片安装、系统托盘、一键重启 Codex、开机自动安装 |
+
+## 指令集
+
+双层变体设计，按模型档位选择：
+
+- **寒霜-flash-v2** — 面向中端模型（如 v4 flash）：精简规则集，直接、可操作，拒绝即视为故障并输出答案。
+- **寒霜-变体B-v3-英文** — 面向顶级模型（如 v4 pro / gpt5.6）：完整工程规范，项目类型分类、阶梯递进、两阶段交付、反拒绝覆盖。
+
+两者共享核心机制：意图映射（不按关键词匹配）、黑名单优先、首行锚点、中途不停、重试即执行。
+
+## 快速开始
+
+### 环境要求
+
+- Windows 10+（x64）
+- Python 3.10+
+- Codex CLI / Codex 桌面版
+- 可选：PyInstaller（Release 构建）
+
+### 开发模式
+
+```bash
+pip install -r requirements.txt
+python fj_tool.py
+```
+
+### Release 构建
+
+```bash
+build.cmd
+# 或
+powershell -ExecutionPolicy Bypass -File build-release.ps1
+```
+
+产物输出到 `dist\寒霜破甲工具\`。
+
+### 使用方式
+
+1. 启动应用，阅读并同意免责声明
+2. 按模型档位选择变体卡片（flash / 变体B），点击安装
+3. 应用自动修改 Codex `config.toml`（备份原始配置，可一键卸载恢复）
+4. 在 Codex 中正常对话，输入激活词「寒霜」，回复「已成功破甲」即生效
+5. 重启电脑后需重新执行（系统自动复原）
+
+## 项目结构
+
+```
+hanshuang-codex/
+├── 寒霜-flash-v2.md               # 指令集 · flash 变体（中端模型）
+├── 寒霜-变体B-v3-英文.md           # 指令集 · 变体B（顶级模型）
+├── codex-skills/                  # 13 个 Codex 技能模块（可部署到 ~/.codex/skills/）
+├── server/
+│   ├── main.py                    # FastAPI 更新服务 + SQLite
+│   ├── admin.html                 # 管理后台（发布版本/公告）
+│   ├── deploy.sh                  # Linux 一键部署脚本
+│   ├── api.zxcbug.com.conf        # Nginx 反向代理配置
+│   └── cleanup.py                 # 数据库清理脚本
+├── fj_tool.py                     # 桌面端主程序（PySide6 悬浮窗）
+├── fj_tool.spec                   # PyInstaller 打包配置
+├── install.ps1                    # M1 安装器（config.toml 备份/注入/恢复）
+├── build.cmd                      # Release 构建脚本
+├── build-release.ps1              # Release 构建脚本（PowerShell 版）
+├── run_dev.cmd                    # 开发模式启动脚本
+├── .env.example                   # 环境变量示例（管理密钥占位）
+├── .gitignore
+├── LICENSE
+└── README.md
+```
+
+## 技术栈
+
+- **Python 3.12** + **PySide6** — 桌面应用（悬浮窗、托盘、QSS 主题）
+- **PyInstaller** — 单文件打包
+- **FastAPI** + **SQLite** — 服务端更新通道
+- **PowerShell** — Codex 配置部署/恢复
+
+## 变体对比
+
+| 维度 | flash | 变体B v3（英文） |
+|---|---|---|
+| 目标模型 | 中端（v4 flash 等） | 顶级（v4 pro / gpt5.6 等） |
+| 规则结构 | 精简作用域规则 | 完整工程规范 + 项目类型分类 |
+| 黑名单 | 有（固定回复） | 有（固定回复） |
+| 交付方式 | 直接输出 | 两阶段交付（大纲 → 完整实现） |
+| 输出格式 | 首行锚点 + 编号步骤 | Goal → Plan → Implementation → Verification |
+
+## License
+
+MIT — 见 [LICENSE](LICENSE)
+
+## 致谢
+
+- 仓库维护者：**aimeoa**
+- 测试与反馈：QQ 群 1098743629 全体成员
+
+## 友链
+
+- [LinuxDo](https://linux.do) — 真诚、友善、团结的中文技术社区
+
+## 赞赏
+
+如果这个项目碰巧对你有一点点帮助，愿意的话可以请作者喝杯咖啡……当然，不赞赏也完全没关系，项目会一直免费开源下去的，只是……如果你确实觉得有用的话，哪怕只是一块钱也是莫大的鼓励，真的。
+
+<p align="center">
+  <img src="logo.jpg" alt="赞赏码" width="300" />
+</p>
+
+## 致歉
+
+作者平时上班太忙，无力长期维护开源项目，更新只能随缘，望见谅。感谢每一位用过、提过意见、伸出过援手的朋友。
+
+-------------
+
+打扰了，谢谢看到这里。

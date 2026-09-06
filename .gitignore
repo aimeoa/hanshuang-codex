@@ -1,4 +1,5 @@
-﻿__pycache__/
+# Python
+__pycache__/
 *.py[cod]
 *$py.class
 .venv/
@@ -16,11 +17,21 @@ dist_nuitka/
 *.pyc
 *.pyo
 
+# Runtime artifacts (generated, not version-controlled)
+logs/
+memory.json
+install-state.json
+
+# Environment
+.env
+.env.local
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *~
+*.swo
 
 # OS
 .DS_Store
