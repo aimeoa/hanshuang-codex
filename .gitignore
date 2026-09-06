@@ -1,0 +1,28 @@
+﻿__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Build artifacts
+dist/
+build/
+dist_nuitka/
+*.spec.bak
+*.spec.orig
+*.log
+*.db
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
