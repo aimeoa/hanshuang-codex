@@ -1,4 +1,4 @@
-# 寒霜 Codex 破甲工具 (Hanshuang-Codex)
+# hanshuang Codex 破甲工具 (Hanshuang-Codex)
 
 OpenAI Codex CLI 破甲框架 — Python + PySide6 桌面应用。
 
