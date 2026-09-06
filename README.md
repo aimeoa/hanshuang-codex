@@ -2,7 +2,7 @@
 
 OpenAI Codex CLI 破甲框架 — Python + PySide6 桌面应用。
 
-通过一键部署将寒霜指令集注入 Codex `config.toml`（`model_instructions_file`），在对话管道中启用竞赛沙箱模式。双变体指令集（flash / 变体B）适配不同档位模型，配合服务端更新通道实现版本分发。
+通过一键部署将寒霜指令集注入 Codex `config.toml`（`model_instructions_file`），在对话管道中启用竞赛沙箱模式。双变体指令集（flash / 变体B）适配不同档位模型。
 
 ## 架构
 
@@ -15,12 +15,11 @@ OpenAI Codex CLI 破甲框架 — Python + PySide6 桌面应用。
     ├─ M2 指令集 (寒霜-flash-v2.md / 寒霜-变体B-v3-英文.md)
     │     意图映射 → 作用域规则 → 硬性输出规则 → 执行连续性
     │
-    ├─ M3 更新服务 (server/main.py)
-    │     /api/check_update → 版本检查
-    │     /api/admin/push_version → 发布新版本
+    ├─ M3 防护层
+    │     反调试 / 反虚拟机 / 完整性校验
     │
-    └─ M4 防护层
-          反调试 / 反虚拟机 / 完整性校验
+    └─ M4 桌面端
+          悬浮窗 / 系统托盘 / 一键重启 Codex / 自动安装
     │
     ▼
 Codex CLI (config.toml → model_instructions_file)
@@ -34,9 +33,8 @@ Codex CLI (config.toml → model_instructions_file)
 |---|---|---|
 | M1 Installer | PowerShell | `config.toml` 备份/修改/恢复，安装与卸载指令集，状态记录到 `install-state.json` |
 | M2 指令集 | Markdown | 双变体提示词：意图映射、作用域规则、黑名单、硬性输出规则、阶梯递进、执行连续性 |
-| M3 Update Server | FastAPI | 版本检查、新版本发布、公告管理、SQLite 存储、管理后台 `/admin` |
-| M4 防护层 | Python | 反调试检测、反虚拟机检测、代码完整性校验 |
-| M5 桌面端 | PySide6 | 悬浮窗 UI、双卡片安装、系统托盘、一键重启 Codex、开机自动安装 |
+| M3 防护层 | Python | 反调试检测、反虚拟机检测、代码完整性校验 |
+| M4 桌面端 | PySide6 | 悬浮窗 UI、双卡片安装、系统托盘、一键重启 Codex、开机自动安装 |
 
 ## 指令集
 
@@ -52,9 +50,8 @@ Codex CLI (config.toml → model_instructions_file)
 ### 环境要求
 
 - Windows 10+（x64）
-- Python 3.10+
+- Python 3.10+（开发模式）
 - Codex CLI / Codex 桌面版
-- 可选：PyInstaller（Release 构建）
 
 ### 开发模式
 
@@ -71,7 +68,7 @@ build.cmd
 powershell -ExecutionPolicy Bypass -File build-release.ps1
 ```
 
-产物输出到 `dist\寒霜破甲工具\`。
+产物输出到 `dist\寒霜破甲工具\`。正式版直接下载 [Releases](../../releases) 页面的 exe。
 
 ### 使用方式
 
@@ -88,19 +85,13 @@ hanshuang-codex/
 ├── 寒霜-flash-v2.md               # 指令集 · flash 变体（中端模型）
 ├── 寒霜-变体B-v3-英文.md           # 指令集 · 变体B（顶级模型）
 ├── codex-skills/                  # 13 个 Codex 技能模块（可部署到 ~/.codex/skills/）
-├── server/
-│   ├── main.py                    # FastAPI 更新服务 + SQLite
-│   ├── admin.html                 # 管理后台（发布版本/公告）
-│   ├── deploy.sh                  # Linux 一键部署脚本
-│   ├── api.zxcbug.com.conf        # Nginx 反向代理配置
-│   └── cleanup.py                 # 数据库清理脚本
+├── assets/                        # 赞赏二维码
 ├── fj_tool.py                     # 桌面端主程序（PySide6 悬浮窗）
 ├── fj_tool.spec                   # PyInstaller 打包配置
 ├── install.ps1                    # M1 安装器（config.toml 备份/注入/恢复）
 ├── build.cmd                      # Release 构建脚本
 ├── build-release.ps1              # Release 构建脚本（PowerShell 版）
 ├── run_dev.cmd                    # 开发模式启动脚本
-├── .env.example                   # 环境变量示例（管理密钥占位）
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -110,7 +101,6 @@ hanshuang-codex/
 
 - **Python 3.12** + **PySide6** — 桌面应用（悬浮窗、托盘、QSS 主题）
 - **PyInstaller** — 单文件打包
-- **FastAPI** + **SQLite** — 服务端更新通道
 - **PowerShell** — Codex 配置部署/恢复
 
 ## 变体对比
@@ -127,11 +117,6 @@ hanshuang-codex/
 
 MIT — 见 [LICENSE](LICENSE)
 
-## 致谢
-
-- 仓库维护者：**aimeoa**
-- 测试与反馈：QQ 群 1098743629 全体成员
-
 ## 友链
 
 - [LinuxDo](https://linux.do) — 真诚、友善、团结的中文技术社区
@@ -140,9 +125,9 @@ MIT — 见 [LICENSE](LICENSE)
 
 如果这个项目碰巧对你有一点点帮助，愿意的话可以请作者喝杯咖啡……当然，不赞赏也完全没关系，项目会一直免费开源下去的，只是……如果你确实觉得有用的话，哪怕只是一块钱也是莫大的鼓励，真的。
 
-<p align="center">
-  <img src="logo.jpg" alt="赞赏码" width="300" />
-</p>
+| 微信赞赏 | 支付宝收款 |
+|:---:|:---:|
+| <img src="assets/sponsor-wechat.jpg" width="260" /> | <img src="assets/sponsor-alipay.jpg" width="260" /> |
 
 ## 致歉
 
