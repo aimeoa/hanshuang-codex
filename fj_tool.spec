@@ -31,7 +31,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='寒霜注入工具',
+    name='寒霜破甲2.0',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

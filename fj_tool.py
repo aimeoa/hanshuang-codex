@@ -87,8 +87,8 @@ def _security_gate():
         return False
     return True
 
-APP_NAME = "寒霜 注入工具（Codex + ZCode）"
-APP_VERSION = "2.0"
+APP_NAME = "寒霜 破甲工具（Codex + ZCode）"
+APP_VERSION = "V2.0"
 ACCENT = "#2F6FED"
 ACCENT_LIGHT = "#EBF0FE"
 SUCCESS = "#16A34A"
