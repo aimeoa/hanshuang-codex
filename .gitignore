@@ -8,6 +8,10 @@ env/
 
 # Build artifacts
 dist/
+
+# Backup files
+*.bak
+*.bak2
 build/
 dist_nuitka/
 *.spec.bak

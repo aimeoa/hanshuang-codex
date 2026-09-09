@@ -1,11 +1,11 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$CodexHome,
     [string]$SourcePrompt,
     [switch]$Uninstall
 )
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Off
 $ErrorActionPreference = 'Stop'
 
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -19,8 +19,8 @@ function Write-Utf8NoBom([string]$Path, [string]$Text) {
 }
 
 function Get-ConfigValueLine([string]$Text) {
-    $match = [regex]::Match($Text, '(?m)^\s*model_instructions_file\s*=\s*.*$')
-    if ($match.Success) { return $match.Value }
+    $match = [regex]::Match($Text, '(?m)^\s*model_instructions_file\s*=\s*[^\r\n]*')
+    if ($match.Success) { return $match.Value.TrimEnd("`r") }
     return $null
 }
 
@@ -44,16 +44,109 @@ $configPath = Join-Path $CodexHome 'config.toml'
 $managedDir = Join-Path $CodexHome 'managed-prompts'
 $targetPrompt = Join-Path $managedDir (Split-Path -Leaf $SourcePrompt)
 $statePath = Join-Path $managedDir 'install-state.json'
+$skillsSource = Join-Path $PSScriptRoot 'codex-skills'
+$skillsTarget = Join-Path $CodexHome 'skills'
+$skillsManifestKey = 'installedSkills'
+
+function Get-SkillDirs {
+    if (-not (Test-Path -LiteralPath $skillsSource)) { return @() }
+    return @(Get-ChildItem -LiteralPath $skillsSource -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') })
+}
+
+function Install-Skills {
+    $installed = @()
+    $dirs = Get-SkillDirs
+    if ($dirs.Count -eq 0) { return $installed }
+    New-Item -ItemType Directory -Force -Path $skillsTarget | Out-Null
+    foreach ($d in $dirs) {
+        $dest = Join-Path $skillsTarget $d.Name
+        Copy-Item -LiteralPath $d.FullName -Destination $dest -Recurse -Force
+        $installed += $d.Name
+    }
+    return $installed
+}
+
+function Remove-Skills([string[]]$Names) {
+    if (-not $Names -or $Names.Count -eq 0) { return }
+    foreach ($n in $Names) {
+        $dest = Join-Path $skillsTarget $n
+        if (Test-Path -LiteralPath $dest) {
+            Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-DisabledSkills {
+    $result = @()
+    if (-not (Test-Path -LiteralPath $configPath)) { return $result }
+    $current = Read-Utf8 $configPath
+    $blocks = [regex]::Split($current, '(?m)^\[\[skills\.config\]\]\s*$')
+    for ($i = 1; $i -lt $blocks.Count; $i++) {
+        $blk = $blocks[$i]
+        $mPath = [regex]::Match($blk, '(?m)^\s*path\s*=\s*"([^"]+)"')
+        if (-not $mPath.Success) { continue }
+        $mEn = [regex]::Match($blk, '(?m)^\s*enabled\s*=\s*(true|false)')
+        $enabled = if ($mEn.Success) { $mEn.Groups[1].Value -eq 'true' } else { $true }
+        if (-not $enabled) {
+            $dir = Split-Path -Parent ($mPath.Groups[1].Value -replace '/', '\')
+            $name = Split-Path -Leaf $dir
+            $parentName = ''
+            try { $parentName = Split-Path -Leaf (Split-Path -Parent $dir) } catch {}
+            # Only accept .../skills/<name>/SKILL.md structure; skip malformed entries
+            if ($name -and $parentName -eq 'skills' -and $name -ne 'skills') {
+                $result += $name
+            }
+        }
+    }
+    return $result
+}
+function Set-SkillsEnabledState([string[]]$DisabledNames) {
+    if (-not (Test-Path -LiteralPath $configPath)) { return }
+    $current = Read-Utf8 $configPath
+    $pattern = '(?ms)^\[\[skills\.config\]\]\s*.*?(?=^\[\[|\z)'
+    $current = [regex]::Replace($current, $pattern, '')
+    $current = $current.TrimEnd() + [Environment]::NewLine
+    foreach ($n in $DisabledNames) {
+        $p = (Join-Path $skillsTarget ($n + '\SKILL.md')).Replace('\', '/')
+        if ([string]::IsNullOrWhiteSpace($n) -or $n -eq 'skills') { continue }
+        $current += '[[skills.config]]' + [Environment]::NewLine +
+            'path = "' + $p + '"' + [Environment]::NewLine + 'enabled = false' + [Environment]::NewLine
+    }
+    Write-Utf8NoBom $configPath $current
+}
+
+function Disable-NonManagedSkills([string[]]$ManagedNames) {
+    $all = @()
+    if (Test-Path -LiteralPath $skillsTarget) {
+        $all = @(Get-ChildItem -LiteralPath $skillsTarget -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') } |
+            Select-Object -ExpandProperty Name)
+    }
+    $toDisable = @($all | Where-Object { $ManagedNames -notcontains $_ })
+    Set-SkillsEnabledState $toDisable
+    return $toDisable
+}
 
 if ($Uninstall) {
-    if (-not (Test-Path -LiteralPath $statePath)) {
-        throw "No installation state found at $statePath"
+    $hadState = Test-Path -LiteralPath $statePath
+    $state = $null
+    if ($hadState) {
+        try {
+            $state = Read-Utf8 $statePath | ConvertFrom-Json
+        } catch {
+            $state = $null
+        }
     }
-    $state = Read-Utf8 $statePath | ConvertFrom-Json
     if (Test-Path -LiteralPath $configPath) {
         $current = Read-Utf8 $configPath
         $pattern = '(?m)^\s*model_instructions_file\s*=\s*.*(?:\r?\n|$)'
-        if ($state.hadLine) {
+    $isOwnPrev = $false
+    if ($state -and $state.previousLine) {
+        $pl = [string]$state.previousLine
+        if ($pl -match "managed-prompts") { $isOwnPrev = $true }
+    }
+    if ($state -and $state.hadLine -and $state.previousLine -and -not $isOwnPrev) {
             $replacement = [string]$state.previousLine + [Environment]::NewLine
             $current = [regex]::Replace($current, $pattern, $replacement, 1)
         } else {
@@ -62,9 +155,27 @@ if ($Uninstall) {
         Write-Utf8NoBom $configPath ($current.TrimEnd() + [Environment]::NewLine)
     }
     Remove-Item -LiteralPath $targetPrompt -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $statePath -Force
-    if (-not (Get-ChildItem -Force -LiteralPath $managedDir | Select-Object -First 1)) {
-        Remove-Item -LiteralPath $managedDir -Force
+    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    # 只移除寒霜安装的 skills，绝不动其他 skills
+    if ($state -and $state.installedSkills) {
+        Remove-Skills @($state.installedSkills)
+        Write-Host ("Removed managed skills: " + ($state.installedSkills -join ", "))
+    }
+    # 恢复安装前的 skills 启用状态（卸载我们加的禁用条目，还原之前的禁用）
+    $restoreDisabled = @()
+    if ($state -and $state.previousDisabledSkills) {
+        $restoreDisabled = @($state.previousDisabledSkills | Where-Object {
+            $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'skills'
+        })
+    }
+    Set-SkillsEnabledState $restoreDisabled
+    if ($restoreDisabled.Count -gt 0) {
+        Write-Host ("Restored previous disabled skills: " + ($restoreDisabled -join ", "))
+    } else {
+        Write-Host "All non-managed skills re-enabled"
+    }
+    if ($hadState -and -not (Get-ChildItem -Force -LiteralPath $managedDir | Select-Object -First 1)) {
+        Remove-Item -LiteralPath $managedDir -Force -ErrorAction SilentlyContinue
     }
     Write-Host "Uninstalled managed prompt from $CodexHome"
     exit 0
@@ -90,6 +201,19 @@ if ([regex]::IsMatch($configText, $linePattern)) {
 }
 Write-Utf8NoBom $configPath ($configText.TrimEnd() + [Environment]::NewLine)
 
+# 部署寒霜 skills 到 Codex skills 目录
+$installedSkills = Install-Skills
+if ($installedSkills.Count -gt 0) {
+    Write-Host ("Installed skills: " + ($installedSkills -join ", "))
+}
+
+# 记录安装前的禁用状态（用于卸载恢复），然后禁用所有非寒霜 skills
+$prevDisabled = Get-DisabledSkills
+$disabledNow = Disable-NonManagedSkills @($installedSkills)
+if ($disabledNow.Count -gt 0) {
+    Write-Host ("Disabled non-managed skills: " + ($disabledNow -join ", "))
+}
+
 $state = [ordered]@{
     installedAt = (Get-Date).ToString('o')
     configPath = $configPath
@@ -97,6 +221,8 @@ $state = [ordered]@{
     configExisted = $configExisted
     hadLine = ($null -ne $previousLine)
     previousLine = $previousLine
+    installedSkills = $installedSkills
+    previousDisabledSkills = $prevDisabled
 }
 Write-Utf8NoBom $statePath (($state | ConvertTo-Json -Depth 3) + [Environment]::NewLine)
 

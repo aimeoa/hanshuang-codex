@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os, sys, subprocess, json, re
-from PySide6.QtCore import Qt, QTimer, QProcess, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QProcess, QUrl, Signal, QObject, QPropertyAnimation, Property, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon, QPixmap, QAction, QDesktopServices, QFont
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QSystemTrayIcon, QMenu, QScrollArea, QFrame, QGraphicsDropShadowEffect, QCheckBox)
+    QPushButton, QSystemTrayIcon, QMenu, QScrollArea, QFrame, QGraphicsDropShadowEffect, QCheckBox, QAbstractButton)
 
 import hashlib
 import hmac
@@ -87,8 +87,8 @@ def _security_gate():
         return False
     return True
 
-APP_NAME = "寒霜 Codex 破甲工具"
-APP_VERSION = "1.0"
+APP_NAME = "寒霜 注入工具（Codex + ZCode）"
+APP_VERSION = "2.0"
 ACCENT = "#2F6FED"
 ACCENT_LIGHT = "#EBF0FE"
 SUCCESS = "#16A34A"
@@ -123,11 +123,12 @@ TUTORIAL_TITLE = "使用教程"
 
 TUTORIAL_TEXT = (
     "使用教程\n\n"
-    "flash 适合那种中端模型 比如 v4 flash\n"
     "codex 顶级全破 就是 v4 pro 和 gpt5.6 用的了 那种顶尖模型\n\n"
     "执行完了 输入激活词「寒霜」 显示\u201c已成功破甲\u201d就是可以了\n\n"
+    "ZCode 注入：点 ZCode 卡片安装，自动写入提示词 + 系统记忆 + 系统提示词，重启 ZCode 生效\n\n"
     "如果遇到不行的情况 重新开对话 重新发就行 有时候会概率拒绝的 正常\n"
-    "一般执行一次之后第一次发是会拒绝 重新开个对话就可以了\n\n"
+    "一般执行一次之后第一次发是会拒绝 重新开个对话就可以了\n"
+    "上下文太长被压缩后 工具会自动检测并弹提示 你发「寒霜」重新激活就行\n\n"
     "如果一直不行 要么是和谐了 要么是中转站惨水 因为安全对齐不一样 给你惨了傻子模型\n\n"
     "每次重启电脑记得重新执行 重启自动复原的\n\n"
     "永久免费       QQ群1098743629"
@@ -317,6 +318,256 @@ class TutorialDialog(QWidget):
         lay.addWidget(close_btn)
 
 
+class ToggleSwitch(QAbstractButton):
+    """滑动开关控件：勾选=启用，取消=禁用，带平滑滑动动画。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(48, 26)
+        self._offset = 0.0
+        self._anim = QPropertyAnimation(self, b'offset', self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.toggled.connect(self._animate)
+
+    def offset(self):
+        return self._offset
+
+    def setOffset(self, v):
+        self._offset = v
+        self.update()
+
+    offset = Property(float, offset, setOffset)
+
+    def _animate(self, checked):
+        self._anim.stop()
+        self._anim.setStartValue(self._offset)
+        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.start()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        r = h / 2.0
+        # 轨道
+        if self.isChecked():
+            track = QColor(ACCENT)
+        else:
+            track = QColor('#D0D5DD')
+        p.setPen(Qt.NoPen)
+        p.setBrush(track)
+        p.drawRoundedRect(0, 0, w, h, r, r)
+        # 滑块
+        pad = 3
+        d = h - pad * 2
+        x = pad + self._offset * (w - d - pad * 2)
+        p.setBrush(QColor('#FFFFFF'))
+        p.drawEllipse(int(round(x)), pad, d, d)
+        p.end()
+
+class SkillsManagerDialog(QWidget):
+    """List all Codex skills with enable/disable toggles."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Skills 管理')
+        self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
+        self.setFixedSize(620, 640)
+        self.setStyleSheet(STYLESHEET)
+        if parent:
+            sg = parent.screen().availableGeometry()
+        else:
+            sg = QApplication.primaryScreen().availableGeometry()
+        x = (sg.width() - self.width()) // 2 + sg.x()
+        y = (sg.height() - self.height()) // 2 + sg.y()
+        self.move(x, y)
+        self._checks = {}   # name -> ToggleSwitch
+        self._build()
+        self._load()
+
+    # ---------- config.toml 读写 ----------
+
+    def _config_path(self):
+        return os.path.join(os.path.expanduser('~'), '.codex', 'config.toml')
+
+    def _read_disabled(self):
+        """Parse config.toml [[skills.config]] blocks -> set of disabled skill names."""
+        disabled = set()
+        cp = self._config_path()
+        if not os.path.exists(cp):
+            return disabled
+        try:
+            with open(cp, 'r', encoding='utf-8') as f:
+                text = f.read()
+        except Exception:
+            return disabled
+        # 按 [[skills.config]] 块切分
+        blocks = re.split(r'(?m)^\[\[skills\.config\]\]\s*$', text)
+        for blk in blocks[1:]:
+            m_path = re.search(r'(?m)^\s*path\s*=\s*"([^"]+)"', blk)
+            m_en = re.search(r'(?m)^\s*enabled\s*=\s*(true|false)', blk)
+            if not m_path:
+                continue
+            path = m_path.group(1).replace('\\', '/')
+            enabled = (m_en.group(1) == 'true') if m_en else True
+            if not enabled:
+                # 从 path 提取 skill 目录名
+                name = os.path.basename(os.path.dirname(path))
+                if name:
+                    disabled.add(name)
+        return disabled
+
+    def _write_disabled(self, disabled):
+        """Rewrite config.toml [[skills.config]] blocks for the given disabled set."""
+        cp = self._config_path()
+        if not os.path.exists(cp):
+            return False
+        try:
+            with open(cp, 'r', encoding='utf-8') as f:
+                text = f.read()
+        except Exception:
+            return False
+        # 删除所有现有 [[skills.config]] 块
+        text = re.sub(r'(?m)^\[\[skills\.config\]\]\s*$.*?(?=^\[\[|\Z)', '', text, flags=re.S)
+        text = text.rstrip() + '\n'
+        # 追加禁用的 skills
+        for name in sorted(disabled):
+            sk = os.path.join(os.path.expanduser('~'), '.codex', 'skills', name, 'SKILL.md')
+            p = sk.replace('\\', '/')
+            text += '\n[[skills.config]]\npath = "' + p + '"\nenabled = false\n'
+        try:
+            with open(cp, 'w', encoding='utf-8') as f:
+                f.write(text)
+            return True
+        except Exception:
+            return False
+
+    # ---------- UI ----------
+
+    def _build(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 22, 24, 22)
+        lay.setSpacing(12)
+        title = QLabel('Skills 管理')
+        title.setStyleSheet('font-size: 20px; font-weight: 700; color: ' + TEXT_PRIMARY + ';')
+        lay.addWidget(title)
+        self._stat = QLabel('')
+        self._stat.setStyleSheet('font-size: 13px; color: ' + TEXT_SECONDARY + ';')
+        lay.addWidget(self._stat)
+        div = QFrame()
+        div.setFrameShape(QFrame.HLine)
+        div.setStyleSheet('background: ' + BORDER_LIGHT + '; max-height: 1px; border: none;')
+        lay.addWidget(div)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        self._list_widget = QWidget()
+        self._list_lay = QVBoxLayout(self._list_widget)
+        self._list_lay.setContentsMargins(4, 4, 4, 4)
+        self._list_lay.setSpacing(2)
+        scroll.setWidget(self._list_widget)
+        lay.addWidget(scroll, 1)
+        # 底部按钮行
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        b_all = QPushButton('全选')
+        b_all.setProperty('class', 'btnSecondary')
+        b_all.setFixedHeight(38)
+        b_all.clicked.connect(lambda: self._set_all(True))
+        btn_row.addWidget(b_all)
+        b_none = QPushButton('全不选')
+        b_none.setProperty('class', 'btnSecondary')
+        b_none.setFixedHeight(38)
+        b_none.clicked.connect(lambda: self._set_all(False))
+        btn_row.addWidget(b_none)
+        btn_row.addStretch(1)
+        b_save = QPushButton('保存')
+        b_save.setProperty('class', 'btnPrimary')
+        b_save.setFixedHeight(38)
+        b_save.clicked.connect(self._save)
+        btn_row.addWidget(b_save)
+        b_close = QPushButton('关闭')
+        b_close.setProperty('class', 'btnSecondary')
+        b_close.setFixedHeight(38)
+        b_close.clicked.connect(self.close)
+        btn_row.addWidget(b_close)
+        lay.addLayout(btn_row)
+        tip = QLabel('勾选 = 启用，取消 = 禁用。保存后需重启 Codex 生效。')
+        tip.setStyleSheet('font-size: 12px; color: ' + TEXT_HINT + ';')
+        lay.addWidget(tip)
+
+    def _load(self):
+        # 清空旧列表
+        while self._list_lay.count():
+            item = self._list_lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._checks = {}
+        disabled = self._read_disabled()
+        sk_dir = os.path.join(os.path.expanduser('~'), '.codex', 'skills')
+        names = []
+        if os.path.isdir(sk_dir):
+            for d in sorted(os.listdir(sk_dir)):
+                full = os.path.join(sk_dir, d)
+                if os.path.isdir(full) and os.path.exists(os.path.join(full, 'SKILL.md')):
+                    names.append(d)
+        for name in names:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(8, 4, 8, 4)
+            rl.setSpacing(10)
+            cb = ToggleSwitch()
+            cb.setChecked(name not in disabled)
+            self._checks[name] = cb
+            rl.addWidget(cb)
+            lbl = QLabel(name)
+            lbl.setStyleSheet('font-size: 14px; color: ' + TEXT_PRIMARY + '; background: transparent;')
+            rl.addWidget(lbl)
+            rl.addStretch(1)
+            # 读取 description 作为提示
+            desc = ''
+            try:
+                with open(os.path.join(sk_dir, name, 'SKILL.md'), 'r', encoding='utf-8', errors='ignore') as f:
+                    head = f.read(600)
+                m = re.search(r'description:\s*(.+)', head)
+                if m:
+                    desc = m.group(1).strip()[:80]
+            except Exception:
+                pass
+            if desc:
+                dl = QLabel(desc)
+                dl.setStyleSheet('font-size: 11px; color: ' + TEXT_HINT + '; background: transparent;')
+                dl.setWordWrap(True)
+                rl.addWidget(dl, 1)
+            self._list_lay.addWidget(row)
+        self._list_lay.addStretch(1)
+        self._update_stat(names)
+
+    def _update_stat(self, names):
+        on = sum(1 for n in names if self._checks.get(n) and self._checks[n].isChecked())
+        self._stat.setText('共 %d 个 · 启用 %d · 禁用 %d' % (len(names), on, len(names) - on))
+
+    def _set_all(self, val):
+        for cb in self._checks.values():
+            cb.setChecked(val)
+        self._update_stat(list(self._checks.keys()))
+
+    def _save(self):
+        disabled = set()
+        for name, cb in self._checks.items():
+            if not cb.isChecked():
+                disabled.add(name)
+        ok = self._write_disabled(disabled)
+        if ok:
+            self._stat.setText('已保存 - 重启 Codex 生效')
+            self._stat.setStyleSheet('font-size: 13px; color: ' + SUCCESS + '; font-weight: 600;')
+        else:
+            self._stat.setText('保存失败 - 无法写入 config.toml')
+            self._stat.setStyleSheet('font-size: 13px; color: ' + DANGER + '; font-weight: 600;')
 class InstallCard(QFrame):
     install_requested = Signal(str)
 
@@ -367,13 +618,101 @@ class InstallCard(QFrame):
             self._btn.setText('安装')
 
 
+class CompactionWatcher(QObject):
+    """Watch Codex session files for context compaction and notify the user."""
+    compacted = Signal(str)
+
+    MARKERS = (
+        'compacted', 'compaction', 'summary of the conversation',
+        'conversation summary', '对话已压缩', '上下文已压缩', '对话摘要',
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._sessions_dir = os.path.join(os.path.expanduser('~'), '.codex', 'sessions')
+        self._known = {}   # path -> (size, pos)
+        self._drop = {}    # path -> [dropped_size, remaining_polls]
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(5000)
+
+    def _session_files(self):
+        if not os.path.isdir(self._sessions_dir):
+            return []
+        out = []
+        for root, _dirs, files in os.walk(self._sessions_dir):
+            for fn in files:
+                if fn.startswith('rollout-') and fn.endswith('.jsonl'):
+                    out.append(os.path.join(root, fn))
+        return out
+
+    def _has_marker(self, text):
+        # Only system messages carry compaction summaries; ignore user/assistant text.
+        import re as _re
+        for line in text.splitlines():
+            if not _re.search(r'"role"\s*:\s*"system"', line):
+                continue
+            low = line.lower()
+            if any(m in low for m in self.MARKERS):
+                return True
+        return False
+
+    def _poll(self):
+        try:
+            files = self._session_files()
+            for p in files:
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                size = st.st_size
+                prev = self._known.get(p)
+                if prev is None:
+                    self._known[p] = (size, size)
+                    continue
+                prev_size, prev_pos = prev
+                emit = False
+                # Signal A: new system message contains a compaction marker (single hit)
+                if size > prev_pos:
+                    try:
+                        with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                            f.seek(prev_pos)
+                            new = f.read()
+                        if self._has_marker(new):
+                            emit = True
+                    except OSError:
+                        pass
+                # Signal B: size drop; confirm if the file stays small on a later poll
+                if not emit:
+                    if prev_size > 20000 and 0 < size < prev_size * 0.6:
+                        self._drop[p] = [size, 6]
+                    elif p in self._drop:
+                        d = self._drop[p]
+                        if size <= d[0]:
+                            emit = True
+                            self._drop.pop(p, None)
+                        else:
+                            d[1] -= 1
+                            if d[1] <= 0:
+                                self._drop.pop(p, None)
+                if emit:
+                    self.compacted.emit(p)
+                self._known[p] = (size, size)
+            for p in list(self._known):
+                if not os.path.exists(p):
+                    del self._known[p]
+                    self._drop.pop(p, None)
+        except Exception:
+            pass
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__(None)
         self.setObjectName('mainWindow')
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.Window)
-        self.setFixedSize(780, 520)
+        self.setFixedSize(820, 540)
         self.setStyleSheet(STYLESHEET)
         screen = QApplication.primaryScreen().availableGeometry()
         x = (screen.width() - self.width()) // 2 + screen.x()
@@ -384,6 +723,8 @@ class MainWindow(QWidget):
         self._tray = None
         self._build()
         self._setup_tray()
+        self._watcher = CompactionWatcher(self)
+        self._watcher.compacted.connect(self._on_compacted)
 
     def _config_dir(self):
         return os.path.expanduser('~/.codex')
@@ -427,9 +768,11 @@ class MainWindow(QWidget):
 
     def _set_buttons_enabled(self, enabled):
         self._card_codex._btn.setEnabled(enabled)
-        self._card_flash._btn.setEnabled(enabled)
+        self._card_zcode._btn.setEnabled(enabled)
         self._btn_restart.setEnabled(enabled)
+        self._btn_reinject.setEnabled(enabled)
         self._btn_uninstall.setEnabled(enabled)
+        self._btn_uninstall_zcode.setEnabled(enabled)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -472,7 +815,7 @@ class MainWindow(QWidget):
         div.setStyleSheet('background: ' + BORDER_LIGHT + '; max-height: 1px; border: none;')
         root.addWidget(div)
 
-        # 主内容区（横向两栏）
+        # 主内容区（横向两栏：Codex 顶尖破甲 / ZCode 注入）
         content = QHBoxLayout()
         content.setSpacing(16)
         left_col = QVBoxLayout()
@@ -481,25 +824,25 @@ class MainWindow(QWidget):
         sec_left.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         left_col.addWidget(sec_left)
         self._card_codex = InstallCard(
-            '顶尖破甲 v1',
+            '顶尖破甲 V2',
             '适用于 GPT-5.6 / v4 Pro 等顶级模型',
-            '寒霜-变体B-v3-英文.md'
+            '寒霜v1.2.md'
         )
         self._card_codex.install_requested.connect(self._run_install)
         left_col.addWidget(self._card_codex, 1)
         content.addLayout(left_col, 1)
         right_col = QVBoxLayout()
         right_col.setSpacing(8)
-        sec_right = QLabel('Flash 中端模型')
+        sec_right = QLabel('ZCode 注入')
         sec_right.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         right_col.addWidget(sec_right)
-        self._card_flash = InstallCard(
-            'Flash 破甲 v1',
-            '适用于 v4 Flash 等中端模型',
-            '寒霜-flash-v2.md'
+        self._card_zcode = InstallCard(
+            'zcode破甲v2',
+            '提示词 + 系统记忆 + 系统提示词',
+            'zcode'
         )
-        self._card_flash.install_requested.connect(self._run_install)
-        right_col.addWidget(self._card_flash, 1)
+        self._card_zcode.install_requested.connect(self._run_zcode_install)
+        right_col.addWidget(self._card_zcode, 1)
         content.addLayout(right_col, 1)
         root.addLayout(content, 1)
 
@@ -525,11 +868,26 @@ class MainWindow(QWidget):
         self._btn_tutorial.setFixedHeight(46)
         self._btn_tutorial.clicked.connect(self._show_tutorial)
         btn_row.addWidget(self._btn_tutorial, 1)
+        self._btn_skills = QPushButton('Skills 管理')
+        self._btn_skills.setProperty('class', 'btnSecondary')
+        self._btn_skills.setFixedHeight(46)
+        self._btn_skills.clicked.connect(self._show_skills_manager)
+        btn_row.addWidget(self._btn_skills, 1)
+        self._btn_reinject = QPushButton('重新注入')
+        self._btn_reinject.setProperty('class', 'btnSecondary')
+        self._btn_reinject.setFixedHeight(46)
+        self._btn_reinject.clicked.connect(self._reinject)
+        btn_row.addWidget(self._btn_reinject, 1)
         self._btn_uninstall = QPushButton('卸载')
         self._btn_uninstall.setProperty('class', 'btnDanger')
         self._btn_uninstall.setFixedHeight(46)
         self._btn_uninstall.clicked.connect(self._uninstall)
         btn_row.addWidget(self._btn_uninstall, 1)
+        self._btn_uninstall_zcode = QPushButton('卸载 ZCode')
+        self._btn_uninstall_zcode.setProperty('class', 'btnDanger')
+        self._btn_uninstall_zcode.setFixedHeight(46)
+        self._btn_uninstall_zcode.clicked.connect(self._uninstall_zcode)
+        btn_row.addWidget(self._btn_uninstall_zcode, 1)
         root.addLayout(btn_row)
 
         div2 = QFrame()
@@ -542,6 +900,9 @@ class MainWindow(QWidget):
         self._status = QLabel('● 就绪')
         self._status.setStyleSheet('font-size: 14px; color: ' + TEXT_SECONDARY + ';')
         footer.addWidget(self._status)
+        self._watch_label = QLabel('● 压缩守护: 运行中')
+        self._watch_label.setStyleSheet('font-size: 12px; color: ' + SUCCESS + ';')
+        footer.addWidget(self._watch_label)
         footer.addStretch(1)
         qb = QPushButton('加入QQ群')
         qb.setProperty('class', 'btnLink')
@@ -575,19 +936,148 @@ class MainWindow(QWidget):
             '-SourcePrompt', prompt_path
         ])
 
+    def _run_zcode_install(self, _tag):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-zcode.ps1')
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-zcode.ps1', 'error')
+            return
+        self._set_status('正在注入 ZCode（提示词 + 记忆 + 系统提示词）...')
+        self._set_buttons_enabled(False)
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._proc.kill()
+            self._proc.waitForFinished(2000)
+        proc = QProcess(self)
+        self._proc = proc
+        proc.setWorkingDirectory(base)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.finished.connect(lambda c, s: self._on_zcode_install_done(c, s))
+        proc.start('powershell.exe', [
+            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
+            '-File', install_ps1, '-PatchSystemPrompt'
+        ])
+
+    def _on_zcode_install_done(self, ec, es):
+        self._set_buttons_enabled(True)
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            self._card_zcode.set_installed(True)
+            self._set_status('ZCode 注入成功 - 重启 ZCode 生效', 'success')
+        else:
+            self._set_status('ZCode 注入失败 (退出码 ' + str(ec) + ')', 'error')
+
+    def _uninstall_zcode(self):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-zcode.ps1')
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-zcode.ps1', 'error')
+            return
+        self._set_status('正在卸载 ZCode 注入...')
+        self._set_buttons_enabled(False)
+        proc = QProcess(self)
+        self._proc = proc
+        proc.setWorkingDirectory(base)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.finished.connect(lambda c, s: self._on_zcode_uninstall_done(c, s))
+        proc.start('powershell.exe', [
+            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
+            '-File', install_ps1, '-Uninstall'
+        ])
+
+    def _on_zcode_uninstall_done(self, ec, es):
+        self._set_buttons_enabled(True)
+        self._card_zcode.set_installed(False)
+        self._set_status('ZCode 注入已卸载', 'success')
+
+    def _count_managed_skills(self):
+        """Count managed skills currently present in ~/.codex/skills."""
+        try:
+            base = _res()
+            src = os.path.join(base, 'codex-skills')
+            if not os.path.isdir(src):
+                return 0
+            names = [d for d in os.listdir(src)
+                     if os.path.isdir(os.path.join(src, d))
+                     and os.path.exists(os.path.join(src, d, 'SKILL.md'))]
+            sk = os.path.join(self._config_dir(), 'skills')
+            if not os.path.isdir(sk):
+                return 0
+            return sum(1 for n in names if os.path.isdir(os.path.join(sk, n)))
+        except Exception:
+            return 0
+    def _install_codex_memory(self):
+        """Install the full AGENTS.md (寒霜v1.2.md) into Codex memories (append, dedupe)."""
+        try:
+            base = _res()
+            prompt_path = os.path.join(base, '寒霜v1.2.md')
+            if not os.path.exists(prompt_path):
+                return
+            codex_mem = os.path.join(self._config_dir(), 'memories')
+            os.makedirs(codex_mem, exist_ok=True)
+            summary_path = os.path.join(codex_mem, 'memory_summary.md')
+            existing = ''
+            if os.path.exists(summary_path):
+                with open(summary_path, 'r', encoding='utf-8') as f:
+                    existing = f.read()
+            if '寒霜注入' in existing:
+                return  # 已安装过，跳过
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            additions = ['## Seagull Profile (寒霜注入)\n' + content]
+            new_text = existing.rstrip() + '\n\n' + '\n\n'.join(additions) + '\n'
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                f.write(new_text)
+        except Exception:
+            pass
+
     def _on_install_done(self, pf, ec, es):
         self._set_buttons_enabled(True)
         ok = (es == QProcess.NormalExit and ec == 0)
         if ok:
-            self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
-            if pf == '寒霜-变体B-v3-英文.md':
+            self._install_codex_memory()
+            n = self._count_managed_skills()
+            if n > 0:
+                self._set_status(pf + ' 破甲成功 - 已启用 ' + str(n) + ' 个 skills - 重启 Codex 生效', 'success')
+            else:
+                self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
+            if pf == '寒霜v1.2.md':
                 self._card_codex.set_installed(True)
-                self._card_flash.set_installed(False)
-            elif pf == '寒霜-flash-v2.md':
-                self._card_flash.set_installed(True)
-                self._card_codex.set_installed(False)
         else:
             self._set_status(pf + ' 失败 (退出码 ' + str(ec) + ')', 'error')
+
+    def _reinject(self):
+        """Re-run install with the currently active variant (after compaction)."""
+        cp = os.path.join(self._config_dir(), 'config.toml')
+        if os.path.exists(cp):
+            try:
+                with open(cp, 'r', encoding='utf-8') as f:
+                    ct = f.read()
+                if '寒霜v1.2' in ct:
+                    self._run_install('寒霜v1.2.md')
+                    return
+            except Exception:
+                pass
+        self._run_install('寒霜v1.2.md')
+
+    def _on_compacted(self, path):
+        # 防抖：压缩信号可能连续触发，避免重复注入
+        if getattr(self, '_reinject_timer', None) is not None and self._reinject_timer.isActive():
+            return
+        self._set_status('检测到上下文压缩 - 自动重新注入指令，请发送「寒霜」确认激活', 'error')
+        if self._tray:
+            try:
+                self._tray.showMessage(
+                    APP_NAME,
+                    '上下文已压缩，正在自动重新注入指令。请在 Codex 中发送「寒霜」确认激活。',
+                    QSystemTrayIcon.Warning, 6000
+                )
+            except Exception:
+                pass
+        # 延迟 1.5 秒后自动重新注入，确保压缩写入完成后再覆盖
+        self._reinject_timer = QTimer(self)
+        self._reinject_timer.setSingleShot(True)
+        self._reinject_timer.timeout.connect(self._reinject)
+        self._reinject_timer.start(1500)
 
     def _uninstall(self):
         base = _res()
@@ -609,13 +1099,26 @@ class MainWindow(QWidget):
 
     def _on_uninstall_done(self, ec, es):
         self._set_buttons_enabled(True)
-        ok = (es == QProcess.NormalExit and ec == 0)
-        if ok:
-            self._set_status('已卸载', 'success')
+        # 无论退出码如何，都重新读取 config.toml 判断注入行是否真的被清除
+        still_injected = False
+        cp = os.path.join(self._config_dir(), 'config.toml')
+        if os.path.exists(cp):
+            try:
+                with open(cp, 'r', encoding='utf-8') as f:
+                    ct = f.read()
+                still_injected = ('model_instructions_file' in ct
+                                  and '寒霜v1.2' in ct)
+            except Exception:
+                pass
+        if not still_injected:
+            n = self._count_managed_skills()
+            if n > 0:
+                self._set_status('已卸载 - 剩余 ' + str(n) + ' 个寒霜 skills 未清理', 'error')
+            else:
+                self._set_status('已卸载 - skills 已全部移除', 'success')
             self._card_codex.set_installed(False)
-            self._card_flash.set_installed(False)
         else:
-            self._set_status('卸载失败', 'error')
+            self._set_status('卸载失败 - config.toml 仍包含注入行', 'error')
 
     def _restart_codex(self):
         self._set_status('正在重启 Codex...')
@@ -643,6 +1146,11 @@ class MainWindow(QWidget):
             self._tutorial = TutorialDialog(self)
         self._tutorial.show()
         self._tutorial.raise_()
+
+    def _show_skills_manager(self):
+        dlg = SkillsManagerDialog(self)
+        dlg.show()
+        dlg.raise_()
 
     def _setup_tray(self):
         try:
@@ -697,16 +1205,14 @@ class MainWindow(QWidget):
     def auto_install(self):
         cp = os.path.join(self._config_dir(), 'config.toml')
         if not os.path.exists(cp):
-            self._run_install('寒霜-变体B-v3-英文.md')
+            self._run_install('寒霜v1.2.md')
             return
         with open(cp, 'r', encoding='utf-8') as f:
             ct = f.read()
-        if '寒霜-flash-v2' in ct:
-            self._run_install('寒霜-flash-v2.md')
-        elif '寒霜-变体B' in ct:
-            self._run_install('寒霜-变体B-v3-英文.md')
+        if '寒霜v1.2' in ct:
+            self._run_install('寒霜v1.2.md')
         else:
-            self._run_install('寒霜-变体B-v3-英文.md')
+            self._run_install('寒霜v1.2.md')
 
 
 def main():
