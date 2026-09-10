@@ -673,9 +673,11 @@ class InstallCard(QFrame):
         top.addWidget(name)
         top.addStretch(1)
         self._tag = QLabel('未安装')
+        self._tag.setFixedSize(40, 40)
+        self._tag.setAlignment(Qt.AlignCenter)
         self._tag.setStyleSheet(
             'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
-            '; border-radius: 2px; padding: 4px 6px;')
+            '; border-radius: 4px;')
         top.addWidget(self._tag)
         lay.addLayout(top)
         desc_label = QLabel(desc)
@@ -698,16 +700,20 @@ class InstallCard(QFrame):
 
     def set_installed(self, ok, version_name=None):
         if ok:
-            self._tag.setText('已安装 ' + version_name if version_name else '已安装 ✓')
+            self._tag.setText('✓' + version_name if version_name else '✓')
+            self._tag.setFixedSize(40, 40)
+            self._tag.setAlignment(Qt.AlignCenter)
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + SUCCESS + '; background: ' + SUCCESS_LIGHT +
-                '; border-radius: 2px; padding: 4px 6px;')
+                '; border-radius: 4px;')
             self._btn.setText('重新安装')
         else:
             self._tag.setText('未安装')
+            self._tag.setFixedSize(40, 40)
+            self._tag.setAlignment(Qt.AlignCenter)
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
-                '; border-radius: 2px; padding: 4px 6px;')
+                '; border-radius: 4px;')
             self._btn.setText('选择版本' if self._versions else '安装')
 
 
