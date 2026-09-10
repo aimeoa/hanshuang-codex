@@ -805,7 +805,7 @@ class MainWindow(QWidget):
         self.setObjectName('mainWindow')
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.Window)
-        self.setFixedSize(820, 540)
+        self.setFixedSize(1080, 660)
         self.setStyleSheet(STYLESHEET)
         screen = QApplication.primaryScreen().availableGeometry()
         x = (screen.width() - self.width()) // 2 + screen.x()
@@ -910,14 +910,14 @@ class MainWindow(QWidget):
         div.setStyleSheet('background: ' + BORDER_LIGHT + '; max-height: 1px; border: none;')
         root.addWidget(div)
 
-        # 主内容区（横向两栏：Codex 顶尖破甲 / ZCode 注入）
+        # 主内容区（横向三栏：Codex 顶尖破甲 / ZCode 注入 / Claude 注入）
         content = QHBoxLayout()
         content.setSpacing(16)
-        left_col = QVBoxLayout()
-        left_col.setSpacing(8)
-        sec_left = QLabel('Codex 顶尖模型')
-        sec_left.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
-        left_col.addWidget(sec_left)
+        col_codex = QVBoxLayout()
+        col_codex.setSpacing(8)
+        sec_codex = QLabel('Codex 顶尖模型')
+        sec_codex.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
+        col_codex.addWidget(sec_codex)
         self._card_codex = InstallCard(
             '顶尖破甲',
             '适用于 GPT-6.0 / v4 Pro 等顶级模型 · 点击选择版本',
@@ -928,28 +928,34 @@ class MainWindow(QWidget):
             ]
         )
         self._card_codex.install_requested.connect(self._run_install)
-        left_col.addWidget(self._card_codex, 1)
-        content.addLayout(left_col, 1)
-        right_col = QVBoxLayout()
-        right_col.setSpacing(8)
-        sec_right = QLabel('ZCode 注入')
-        sec_right.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
-        right_col.addWidget(sec_right)
+        col_codex.addWidget(self._card_codex, 1)
+        content.addLayout(col_codex, 1)
+        col_zcode = QVBoxLayout()
+        col_zcode.setSpacing(8)
+        sec_zcode = QLabel('ZCode 注入')
+        sec_zcode.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
+        col_zcode.addWidget(sec_zcode)
         self._card_zcode = InstallCard(
             'zcode破甲v2',
             '提示词 + 系统记忆 + 系统提示词',
             'zcode'
         )
         self._card_zcode.install_requested.connect(self._run_zcode_install)
-        right_col.addWidget(self._card_zcode, 1)
+        col_zcode.addWidget(self._card_zcode, 1)
+        content.addLayout(col_zcode, 1)
+        col_claude = QVBoxLayout()
+        col_claude.setSpacing(8)
+        sec_claude = QLabel('Claude 注入')
+        sec_claude.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
+        col_claude.addWidget(sec_claude)
         self._card_claude = InstallCard(
             'Claude 注入',
             '寒霜工作规范注入 ~/.claude/CLAUDE.md · 备份原文件可卸载恢复',
             'claude'
         )
         self._card_claude.install_requested.connect(self._run_claude_install)
-        right_col.addWidget(self._card_claude, 1)
-        content.addLayout(right_col, 1)
+        col_claude.addWidget(self._card_claude, 1)
+        content.addLayout(col_claude, 1)
         root.addLayout(content, 1)
 
         auto_row = QHBoxLayout()
