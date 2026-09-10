@@ -4,7 +4,7 @@ import os, sys, subprocess, json, re
 from PySide6.QtCore import Qt, QTimer, QProcess, QUrl, Signal, QObject, QPropertyAnimation, Property, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon, QPixmap, QAction, QDesktopServices, QFont
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QSystemTrayIcon, QMenu, QScrollArea, QFrame, QGraphicsDropShadowEffect, QCheckBox, QAbstractButton)
+    QPushButton, QSystemTrayIcon, QMenu, QScrollArea, QFrame, QGraphicsDropShadowEffect, QCheckBox, QAbstractButton, QDialog)
 
 import hashlib
 import hmac
@@ -154,6 +154,9 @@ QPushButton.btnLink { background: transparent; color: #2F6FED; border: none; fon
 QPushButton.btnLink:hover { color: #1E5CD6; background: #EBF0FE; }
 QPushButton.btnLink:pressed { color: #1E5CD6; background: #DCE6FD; }
 QFrame.card { background: #F7F8FC; border: 1px solid #E2E6ED; border-radius: 12px; }
+QFrame.versionRow { background: #FFFFFF; border: 1.5px solid #E2E6ED; border-radius: 10px; }
+QFrame.versionRow:hover { border: 1.5px solid #2F6FED; background: #F7FAFF; }
+QFrame.versionRowSel { background: #EBF0FE; border: 1.5px solid #2F6FED; border-radius: 10px; }
 QScrollArea { background: transparent; border: none; }
 QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
 QScrollBar::handle:vertical { background: #D0D5DD; border-radius: 4px; min-height: 30px; }
@@ -568,12 +571,94 @@ class SkillsManagerDialog(QWidget):
         else:
             self._stat.setText('保存失败 - 无法写入 config.toml')
             self._stat.setStyleSheet('font-size: 13px; color: ' + DANGER + '; font-weight: 600;')
+class VersionRow(QFrame):
+    """版本选择对话框中的单行版本卡片，点击选中。"""
+    clicked = Signal()
+
+    def __init__(self, name, desc, recommended=False, parent=None):
+        super().__init__(parent)
+        self.setProperty('class', 'versionRow')
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        nm = QLabel(name)
+        nm.setStyleSheet('font-size: 14px; font-weight: 700; color: ' + TEXT_PRIMARY + '; background: transparent;')
+        top.addWidget(nm)
+        top.addStretch(1)
+        if recommended:
+            rec = QLabel('推荐')
+            rec.setStyleSheet(
+                'font-size: 11px; font-weight: 600; color: ' + ACCENT + '; background: ' + ACCENT_LIGHT +
+                '; border-radius: 8px; padding: 2px 8px;')
+            top.addWidget(rec)
+        lay.addLayout(top)
+        ds = QLabel(desc)
+        ds.setWordWrap(True)
+        ds.setStyleSheet('font-size: 12px; color: ' + TEXT_SECONDARY + '; background: transparent;')
+        lay.addWidget(ds)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class VersionDialog(QDialog):
+    """点击「安装」后弹出的版本选择对话框。"""
+
+    def __init__(self, title, versions, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setFixedWidth(480)
+        self._selected = None
+        self._rows = []
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(10)
+        tip = QLabel('选择要安装的版本：')
+        tip.setStyleSheet('font-size: 13px; font-weight: 600; color: ' + TEXT_PRIMARY + '; background: transparent;')
+        root.addWidget(tip)
+        for name, desc, pf, rec in versions:
+            row = VersionRow(name, desc, rec)
+            row.clicked.connect(lambda pf=pf, r=row: self._select(pf, r))
+            root.addWidget(row)
+            self._rows.append(row)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        cancel = QPushButton('取消')
+        cancel.setProperty('class', 'btnSecondary')
+        cancel.setFixedHeight(40)
+        cancel.clicked.connect(self.reject)
+        btn_row.addWidget(cancel, 1)
+        self._ok = QPushButton('安装')
+        self._ok.setProperty('class', 'btnPrimary')
+        self._ok.setFixedHeight(40)
+        self._ok.setEnabled(False)
+        self._ok.clicked.connect(self.accept)
+        btn_row.addWidget(self._ok, 1)
+        root.addLayout(btn_row)
+
+    def _select(self, pf, row):
+        self._selected = pf
+        for r in self._rows:
+            r.setProperty('class', 'versionRowSel' if r is row else 'versionRow')
+            r.style().unpolish(r)
+            r.style().polish(r)
+        self._ok.setEnabled(True)
+
+    def selected(self):
+        return self._selected
+
+
 class InstallCard(QFrame):
     install_requested = Signal(str)
 
-    def __init__(self, title, desc, prompt_filename, parent=None):
+    def __init__(self, title, desc, prompt_filename=None, versions=None, parent=None):
         super().__init__(parent)
         self._prompt_filename = prompt_filename
+        self._versions = versions or []
         self.setProperty('class', 'card')
         self._build(title, desc)
 
@@ -597,15 +682,23 @@ class InstallCard(QFrame):
         desc_label.setWordWrap(True)
         desc_label.setStyleSheet('font-size: 13px; color: ' + TEXT_SECONDARY + '; background: transparent;')
         lay.addWidget(desc_label)
-        self._btn = QPushButton('安装')
+        self._btn = QPushButton('选择版本' if self._versions else '安装')
         self._btn.setProperty('class', 'btnPrimary')
         self._btn.setFixedHeight(46)
-        self._btn.clicked.connect(lambda: self.install_requested.emit(self._prompt_filename))
+        if self._versions:
+            self._btn.clicked.connect(self._choose_version)
+        else:
+            self._btn.clicked.connect(lambda: self.install_requested.emit(self._prompt_filename))
         lay.addWidget(self._btn)
 
-    def set_installed(self, ok):
+    def _choose_version(self):
+        dlg = VersionDialog('选择版本', self._versions, self)
+        if dlg.exec() == QDialog.Accepted and dlg.selected():
+            self.install_requested.emit(dlg.selected())
+
+    def set_installed(self, ok, version_name=None):
         if ok:
-            self._tag.setText('已安装 ✓')
+            self._tag.setText('已安装 ' + version_name if version_name else '已安装 ✓')
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + SUCCESS + '; background: ' + SUCCESS_LIGHT +
                 '; border-radius: 10px; padding: 4px 12px;')
@@ -615,7 +708,7 @@ class InstallCard(QFrame):
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
                 '; border-radius: 10px; padding: 4px 12px;')
-            self._btn.setText('安装')
+            self._btn.setText('选择版本' if self._versions else '安装')
 
 
 class CompactionWatcher(QObject):
@@ -824,19 +917,15 @@ class MainWindow(QWidget):
         sec_left.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         left_col.addWidget(sec_left)
         self._card_codex = InstallCard(
-            '顶尖破甲 V2',
-            '适用于 GPT-5.6 / v4 Pro 等顶级模型',
-            '寒霜v1.2.md'
+            '顶尖破甲',
+            '适用于 GPT-5.6 / v4 Pro 等顶级模型 · 点击选择版本',
+            versions=[
+                ('顶尖破甲 V2', '完整 CTF Lab 2.0 规范 · 身份路由 + 交付标准 + 压缩防护', '寒霜v1.2.md', True),
+                ('顶尖破甲 v1（变体B）', '旧版顶尖提示词 · 完整工程规范 · 项目类型分类 + 两阶段交付', '寒霜-变体B-v3-英文.md', False),
+            ]
         )
         self._card_codex.install_requested.connect(self._run_install)
         left_col.addWidget(self._card_codex, 1)
-        self._card_v1 = InstallCard(
-            '顶尖破甲 v1（变体B）',
-            '旧版顶尖提示词 · 完整工程规范 · 适用于 GPT-5.6 / v4 Pro 等顶级模型',
-            '寒霜-变体B-v3-英文.md'
-        )
-        self._card_v1.install_requested.connect(self._run_install)
-        left_col.addWidget(self._card_v1, 1)
         content.addLayout(left_col, 1)
         right_col = QVBoxLayout()
         right_col.setSpacing(8)
@@ -1048,9 +1137,9 @@ class MainWindow(QWidget):
             else:
                 self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
             if pf == '寒霜v1.2.md':
-                self._card_codex.set_installed(True)
+                self._card_codex.set_installed(True, 'V2')
             elif pf == '寒霜-变体B-v3-英文.md':
-                self._card_v1.set_installed(True)
+                self._card_codex.set_installed(True, 'v1 变体B')
         else:
             self._set_status(pf + ' 失败 (退出码 ' + str(ec) + ')', 'error')
 
