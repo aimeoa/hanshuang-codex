@@ -88,7 +88,7 @@ def _security_gate():
     return True
 
 APP_NAME = "寒霜破甲工具"
-APP_VERSION = "V2.0"
+APP_VERSION = "V3.0"
 ACCENT = "#2F6FED"
 ACCENT_LIGHT = "#EBF0FE"
 SUCCESS = "#16A34A"
@@ -675,7 +675,7 @@ class InstallCard(QFrame):
         self._tag = QLabel('未安装')
         self._tag.setStyleSheet(
             'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
-            '; border-radius: 10px; padding: 4px 12px;')
+            '; border-radius: 4px; padding: 4px 8px;')
         top.addWidget(self._tag)
         lay.addLayout(top)
         desc_label = QLabel(desc)
@@ -701,13 +701,13 @@ class InstallCard(QFrame):
             self._tag.setText('已安装 ' + version_name if version_name else '已安装 ✓')
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + SUCCESS + '; background: ' + SUCCESS_LIGHT +
-                '; border-radius: 10px; padding: 4px 12px;')
+                '; border-radius: 4px; padding: 4px 8px;')
             self._btn.setText('重新安装')
         else:
             self._tag.setText('未安装')
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
-                '; border-radius: 10px; padding: 4px 12px;')
+                '; border-radius: 4px; padding: 4px 8px;')
             self._btn.setText('选择版本' if self._versions else '安装')
 
 
@@ -1025,6 +1025,12 @@ class MainWindow(QWidget):
         qb.setProperty('class', 'btnLink')
         qb.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(QQ_LINK)))
         footer.addWidget(qb)
+        self._btn_quit = QPushButton('退出')
+        self._btn_quit.setProperty('class', 'btnDanger')
+        self._btn_quit.setFixedHeight(34)
+        self._btn_quit.setFixedWidth(72)
+        self._btn_quit.clicked.connect(self._quit)
+        footer.addWidget(self._btn_quit)
         root.addLayout(footer)
 
     def _run_install(self, prompt_filename):
