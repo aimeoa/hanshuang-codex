@@ -830,6 +830,13 @@ class MainWindow(QWidget):
         )
         self._card_codex.install_requested.connect(self._run_install)
         left_col.addWidget(self._card_codex, 1)
+        self._card_v1 = InstallCard(
+            '顶尖破甲 v1（变体B）',
+            '旧版顶尖提示词 · 完整工程规范 · 适用于 GPT-5.6 / v4 Pro 等顶级模型',
+            '寒霜-变体B-v3-英文.md'
+        )
+        self._card_v1.install_requested.connect(self._run_install)
+        left_col.addWidget(self._card_v1, 1)
         content.addLayout(left_col, 1)
         right_col = QVBoxLayout()
         right_col.setSpacing(8)
@@ -1042,6 +1049,8 @@ class MainWindow(QWidget):
                 self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
             if pf == '寒霜v1.2.md':
                 self._card_codex.set_installed(True)
+            elif pf == '寒霜-变体B-v3-英文.md':
+                self._card_v1.set_installed(True)
         else:
             self._set_status(pf + ' 失败 (退出码 ' + str(ec) + ')', 'error')
 
@@ -1054,6 +1063,9 @@ class MainWindow(QWidget):
                     ct = f.read()
                 if '寒霜v1.2' in ct:
                     self._run_install('寒霜v1.2.md')
+                    return
+                if '寒霜-变体B' in ct:
+                    self._run_install('寒霜-变体B-v3-英文.md')
                     return
             except Exception:
                 pass
