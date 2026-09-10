@@ -11,6 +11,7 @@ a = Analysis(
         ('install.ps1', '.'),
         ('install-zcode.ps1', '.'),
         ('寒霜v1.2.md', '.'),
+        ('寒霜-变体B-v3-英文.md', '.'),
         ('codex-skills', 'codex-skills'),
         ('memory', 'memory'),
     ],
