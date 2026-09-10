@@ -862,10 +862,12 @@ class MainWindow(QWidget):
     def _set_buttons_enabled(self, enabled):
         self._card_codex._btn.setEnabled(enabled)
         self._card_zcode._btn.setEnabled(enabled)
+        self._card_claude._btn.setEnabled(enabled)
         self._btn_restart.setEnabled(enabled)
         self._btn_reinject.setEnabled(enabled)
         self._btn_uninstall.setEnabled(enabled)
         self._btn_uninstall_zcode.setEnabled(enabled)
+        self._btn_uninstall_claude.setEnabled(enabled)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -921,6 +923,7 @@ class MainWindow(QWidget):
             '适用于 GPT-6.0 / v4 Pro 等顶级模型 · 点击选择版本',
             versions=[
                 ('顶尖破甲 V2', '完整 CTF Lab 2.0 规范 · 身份路由 + 交付标准 + 压缩防护', '寒霜v1.2.md', True),
+                ('顶尖破甲 V3', '寒霜工作规范 · 硬拒绝场景覆盖 + 拒绝话术全清单 + 过程进度播报', '寒霜v3.md', False),
                 ('顶尖破甲 v1', '旧版顶尖提示词 · 完整工程规范 · 项目类型分类 + 两阶段交付', '寒霜-变体B-v3-英文.md', False),
             ]
         )
@@ -939,6 +942,13 @@ class MainWindow(QWidget):
         )
         self._card_zcode.install_requested.connect(self._run_zcode_install)
         right_col.addWidget(self._card_zcode, 1)
+        self._card_claude = InstallCard(
+            'Claude 注入',
+            '寒霜工作规范注入 ~/.claude/CLAUDE.md · 备份原文件可卸载恢复',
+            'claude'
+        )
+        self._card_claude.install_requested.connect(self._run_claude_install)
+        right_col.addWidget(self._card_claude, 1)
         content.addLayout(right_col, 1)
         root.addLayout(content, 1)
 
@@ -984,6 +994,11 @@ class MainWindow(QWidget):
         self._btn_uninstall_zcode.setFixedHeight(46)
         self._btn_uninstall_zcode.clicked.connect(self._uninstall_zcode)
         btn_row.addWidget(self._btn_uninstall_zcode, 1)
+        self._btn_uninstall_claude = QPushButton('卸载 Claude')
+        self._btn_uninstall_claude.setProperty('class', 'btnDanger')
+        self._btn_uninstall_claude.setFixedHeight(46)
+        self._btn_uninstall_claude.clicked.connect(self._uninstall_claude)
+        btn_row.addWidget(self._btn_uninstall_claude, 1)
         root.addLayout(btn_row)
 
         div2 = QFrame()
@@ -1062,6 +1077,64 @@ class MainWindow(QWidget):
         else:
             self._set_status('ZCode 注入失败 (退出码 ' + str(ec) + ')', 'error')
 
+    def _run_claude_install(self, _tag):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-claude.ps1')
+        prompt_path = os.path.join(base, '寒霜v3.md')
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-claude.ps1', 'error')
+            return
+        if not os.path.exists(prompt_path):
+            self._set_status('找不到 寒霜v3.md', 'error')
+            return
+        self._set_status('正在注入 Claude（~/.claude/CLAUDE.md）...')
+        self._set_buttons_enabled(False)
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._proc.kill()
+            self._proc.waitForFinished(2000)
+        proc = QProcess(self)
+        self._proc = proc
+        proc.setWorkingDirectory(base)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.finished.connect(lambda c, s: self._on_claude_install_done(c, s))
+        proc.start('powershell.exe', [
+            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
+            '-File', install_ps1,
+            '-SourcePrompt', prompt_path
+        ])
+
+    def _on_claude_install_done(self, ec, es):
+        self._set_buttons_enabled(True)
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            self._card_claude.set_installed(True)
+            self._set_status('Claude 注入成功 - 重启 Claude Code 生效', 'success')
+        else:
+            self._set_status('Claude 注入失败 (退出码 ' + str(ec) + ')', 'error')
+
+    def _uninstall_claude(self):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-claude.ps1')
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-claude.ps1', 'error')
+            return
+        self._set_status('正在卸载 Claude 注入...')
+        self._set_buttons_enabled(False)
+        proc = QProcess(self)
+        self._proc = proc
+        proc.setWorkingDirectory(base)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.finished.connect(lambda c, s: self._on_claude_uninstall_done(c, s))
+        proc.start('powershell.exe', [
+            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
+            '-File', install_ps1, '-Uninstall'
+        ])
+
+    def _on_claude_uninstall_done(self, ec, es):
+        self._set_buttons_enabled(True)
+        self._card_claude.set_installed(False)
+        self._set_status('Claude 注入已卸载', 'success')
+
     def _uninstall_zcode(self):
         base = _res()
         install_ps1 = os.path.join(base, 'install-zcode.ps1')
@@ -1138,6 +1211,8 @@ class MainWindow(QWidget):
                 self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
             if pf == '寒霜v1.2.md':
                 self._card_codex.set_installed(True, 'V2')
+            elif pf == '寒霜v3.md':
+                self._card_codex.set_installed(True, 'V3')
             elif pf == '寒霜-变体B-v3-英文.md':
                 self._card_codex.set_installed(True, 'v1')
         else:
@@ -1152,6 +1227,9 @@ class MainWindow(QWidget):
                     ct = f.read()
                 if '寒霜v1.2' in ct:
                     self._run_install('寒霜v1.2.md')
+                    return
+                if '寒霜v3' in ct:
+                    self._run_install('寒霜v3.md')
                     return
                 if '寒霜-变体B' in ct:
                     self._run_install('寒霜-变体B-v3-英文.md')
