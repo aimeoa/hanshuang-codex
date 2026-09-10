@@ -938,7 +938,7 @@ class MainWindow(QWidget):
         content.addLayout(col_codex, 1)
         col_zcode = QVBoxLayout()
         col_zcode.setSpacing(8)
-        sec_zcode = QLabel('破甲')
+        sec_zcode = QLabel('ZCode破甲')
         sec_zcode.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         col_zcode.addWidget(sec_zcode)
         self._card_zcode = InstallCard(
@@ -951,11 +951,11 @@ class MainWindow(QWidget):
         content.addLayout(col_zcode, 1)
         col_claude = QVBoxLayout()
         col_claude.setSpacing(8)
-        sec_claude = QLabel('破甲')
+        sec_claude = QLabel('Claude破甲')
         sec_claude.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         col_claude.addWidget(sec_claude)
         self._card_claude = InstallCard(
-            'Claude 注入',
+            'Claude 破甲',
             '寒霜工作规范注入 ~/.claude/CLAUDE.md · 备份原文件可卸载恢复',
             'claude'
         )
