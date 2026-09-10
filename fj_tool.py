@@ -938,7 +938,7 @@ class MainWindow(QWidget):
         content.addLayout(col_codex, 1)
         col_zcode = QVBoxLayout()
         col_zcode.setSpacing(8)
-        sec_zcode = QLabel('ZCode 注入')
+        sec_zcode = QLabel('破甲')
         sec_zcode.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         col_zcode.addWidget(sec_zcode)
         self._card_zcode = InstallCard(
@@ -951,7 +951,7 @@ class MainWindow(QWidget):
         content.addLayout(col_zcode, 1)
         col_claude = QVBoxLayout()
         col_claude.setSpacing(8)
-        sec_claude = QLabel('Claude 注入')
+        sec_claude = QLabel('破甲')
         sec_claude.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
         col_claude.addWidget(sec_claude)
         self._card_claude = InstallCard(
