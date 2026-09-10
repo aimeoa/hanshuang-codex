@@ -87,7 +87,7 @@ def _security_gate():
         return False
     return True
 
-APP_NAME = "寒霜 破甲工具（Codex + ZCode）"
+APP_NAME = "寒霜破甲工具"
 APP_VERSION = "V2.0"
 ACCENT = "#2F6FED"
 ACCENT_LIGHT = "#EBF0FE"
@@ -123,7 +123,7 @@ TUTORIAL_TITLE = "使用教程"
 
 TUTORIAL_TEXT = (
     "使用教程\n\n"
-    "codex 顶级全破 就是 v4 pro 和 gpt5.6 用的了 那种顶尖模型\n\n"
+    "codex 顶级全破 就是 v4 pro 和 gpt6.0 用的了 那种顶尖模型\n\n"
     "执行完了 输入激活词「寒霜」 显示\u201c已成功破甲\u201d就是可以了\n\n"
     "ZCode 注入：点 ZCode 卡片安装，自动写入提示词 + 系统记忆 + 系统提示词，重启 ZCode 生效\n\n"
     "如果遇到不行的情况 重新开对话 重新发就行 有时候会概率拒绝的 正常\n"
@@ -918,10 +918,10 @@ class MainWindow(QWidget):
         left_col.addWidget(sec_left)
         self._card_codex = InstallCard(
             '顶尖破甲',
-            '适用于 GPT-5.6 / v4 Pro 等顶级模型 · 点击选择版本',
+            '适用于 GPT-6.0 / v4 Pro 等顶级模型 · 点击选择版本',
             versions=[
                 ('顶尖破甲 V2', '完整 CTF Lab 2.0 规范 · 身份路由 + 交付标准 + 压缩防护', '寒霜v1.2.md', True),
-                ('顶尖破甲 v1（变体B）', '旧版顶尖提示词 · 完整工程规范 · 项目类型分类 + 两阶段交付', '寒霜-变体B-v3-英文.md', False),
+                ('顶尖破甲 v1', '旧版顶尖提示词 · 完整工程规范 · 项目类型分类 + 两阶段交付', '寒霜-变体B-v3-英文.md', False),
             ]
         )
         self._card_codex.install_requested.connect(self._run_install)
@@ -1139,7 +1139,7 @@ class MainWindow(QWidget):
             if pf == '寒霜v1.2.md':
                 self._card_codex.set_installed(True, 'V2')
             elif pf == '寒霜-变体B-v3-英文.md':
-                self._card_codex.set_installed(True, 'v1 变体B')
+                self._card_codex.set_installed(True, 'v1')
         else:
             self._set_status(pf + ' 失败 (退出码 ' + str(ec) + ')', 'error')
 
