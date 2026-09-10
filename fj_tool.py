@@ -592,7 +592,7 @@ class VersionRow(QFrame):
             rec = QLabel('推荐')
             rec.setStyleSheet(
                 'font-size: 11px; font-weight: 600; color: ' + ACCENT + '; background: ' + ACCENT_LIGHT +
-                '; border-radius: 8px; padding: 2px 8px;')
+                '; border-radius: 2px; padding: 2px 6px;')
             top.addWidget(rec)
         lay.addLayout(top)
         ds = QLabel(desc)
@@ -675,7 +675,7 @@ class InstallCard(QFrame):
         self._tag = QLabel('未安装')
         self._tag.setStyleSheet(
             'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
-            '; border-radius: 4px; padding: 4px 8px;')
+            '; border-radius: 2px; padding: 4px 6px;')
         top.addWidget(self._tag)
         lay.addLayout(top)
         desc_label = QLabel(desc)
@@ -701,13 +701,13 @@ class InstallCard(QFrame):
             self._tag.setText('已安装 ' + version_name if version_name else '已安装 ✓')
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + SUCCESS + '; background: ' + SUCCESS_LIGHT +
-                '; border-radius: 4px; padding: 4px 8px;')
+                '; border-radius: 2px; padding: 4px 6px;')
             self._btn.setText('重新安装')
         else:
             self._tag.setText('未安装')
             self._tag.setStyleSheet(
                 'font-size: 12px; font-weight: 600; color: ' + TEXT_HINT + '; background: ' + BG_HOVER +
-                '; border-radius: 4px; padding: 4px 8px;')
+                '; border-radius: 2px; padding: 4px 6px;')
             self._btn.setText('选择版本' if self._versions else '安装')
 
 
