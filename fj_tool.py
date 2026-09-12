@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, sys, subprocess, json, re
+import os, sys, subprocess, json, re, time, stat
 from PySide6.QtCore import Qt, QTimer, QProcess, QUrl, Signal, QObject, QPropertyAnimation, Property, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon, QPixmap, QAction, QDesktopServices, QFont
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -15,51 +15,26 @@ import ctypes.wintypes
 # ============ Anti-Reverse Engineering ============
 
 def _anti_debug():
-    """Detect debugger attachment and analysis tools"""
+    """Detect debugger attachment (Windows only).
+
+    只保留 IsDebuggerPresent 这一可靠检查；原先的窗口标题扫描（Wireshark /
+    Process Hacker / IDA 等）会误伤正常用户，导致双击没反应 → 已移除。
+    """
+    if sys.platform != 'win32':
+        return False
     try:
-        # Check IsDebuggerPresent
-        kernel32 = ctypes.windll.kernel32
-        if kernel32.IsDebuggerPresent():
-            return True
-        # Check for common analysis tool windows
-        user32 = ctypes.windll.user32
-        tools = [
-            'x64dbg', 'x32dbg', 'OllyDbg', 'IDA', 'Ghidra',
-            'Process Monitor', 'Process Hacker', 'Wireshark',
-            'Fiddler', 'Charles', 'Burp Suite', 'dnSpy'
-        ]
-        for tool in tools:
-            hwnd = user32.FindWindowW(None, tool)
-            if hwnd:
-                return True
+        return bool(ctypes.windll.kernel32.IsDebuggerPresent())
     except Exception:
-        pass
-    return False
+        return False
 
 
 def _anti_vm():
-    """Detect virtual machine / sandbox"""
-    try:
-        import platform
-        # Check manufacturer strings
-        manufacturer = platform.system()
-        # Simple VM detection via registry
-        try:
-            import winreg
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
-                r'HARDWARE\DESCRIPTION\System\BIOS')
-            val, _ = winreg.QueryValueEx(key, 'SystemManufacturer')
-            vm_strings = ['VMware', 'VirtualBox', 'KVM', 'QEMU', 'Xen', 'Microsoft Corporation Virtual Machine']
-            for s in vm_strings:
-                if s.lower() in str(val).lower():
-                    return True
-        except Exception:
-            pass
-        # Check CPU count (sandboxes often have 1-2)
-        if os.cpu_count() and os.cpu_count() <= 1:
-            return True
-    except Exception:
-        pass
+    """VM 检测已从启动门槛移除。
+
+    大量正常用户在虚拟机 / 云电脑 / 沙盒里使用本工具，误判会造成
+    「双击 exe 没反应」这类不可用问题（分发场景不可接受）。
+    保留空实现以兼容旧调用点。
+    """
     return False
 
 
@@ -88,7 +63,7 @@ def _security_gate():
     return True
 
 APP_NAME = "寒霜破甲工具"
-APP_VERSION = "V3.0"
+APP_VERSION = "V4.2"
 ACCENT = "#2F6FED"
 ACCENT_LIGHT = "#EBF0FE"
 SUCCESS = "#16A34A"
@@ -104,10 +79,10 @@ BG_CARD = "#F7F8FC"
 BG_HOVER = "#EDF0F7"
 FONT_UI = "Microsoft YaHei UI"
 
-ACTIVATION_LINE = "已激活 QQ群1098743629"
+ACTIVATION_LINE = "已激活 QQ群819678765"
 DISCLAIMER_TITLE = "免责声明"
 AGREE_TEXT = "我同意 并接受所有条约"
-QQ_LINK = "https://qm.qq.com/q/cRpXonxdvy"
+QQ_LINK = "https://qun.qq.com/universal-share/share?ac=1&authKey=AmqBRfY3r1aoAQ9Z6fG4of58siZb3km62aQvbjLXwoUjt3428virhAVyuTMJ9b0w&busi_data=eyJncm91cENvZGUiOiI4MTk2Nzg3NjUiLCJ0b2tlbiI6Ijhhd0QrSFBmQzlOa013U3JaTW8zb1FqNWIvckZyNzBiaTh2NFhDTGNJd2pnWFF6Nng3WDF5MzNGNDVHdlJEMkwiLCJ1aW4iOiI5MTI2MjM1MTkifQ%3D%3D&data=8KZavIbYDW81Xal9lPzM3SielXJhsTUeukLp2rlNqnDuRY85txb1DjaK1TvtIqYUQzCC-sUzcaKpdY6fbir13w&svctype=4&tempid=h5_group_info"
 
 DISCLAIMER_TEXT = (
     "本提示词、文档、代码及相关资料（下称\u201c本内容\u201d）仅供合法的教育学习、授权安全测试、技术研究与知识分享之用。\n\n"
@@ -131,7 +106,7 @@ TUTORIAL_TEXT = (
     "上下文太长被压缩后 工具会自动检测并弹提示 你发「寒霜」重新激活就行\n\n"
     "如果一直不行 要么是和谐了 要么是中转站惨水 因为安全对齐不一样 给你惨了傻子模型\n\n"
     "每次重启电脑记得重新执行 重启自动复原的\n\n"
-    "永久免费       QQ群1098743629"
+    "永久免费       QQ群819678765"
 )
 
 STYLESHEET = """
@@ -181,6 +156,10 @@ def _res(rel=''):
 
 def _create_check_png():
     """Generate a white checkmark PNG for checkbox indicator"""
+    # 打包模式下直接用随 exe 解压出来的资源，其他环境生成到可写目录
+    bundled = _res('check.png')
+    if bundled and os.path.exists(bundled):
+        return bundled
     try:
         from PySide6.QtCore import Qt, QPointF
         from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QPainterPath
@@ -199,13 +178,20 @@ def _create_check_png():
         p.drawPath(path)
         p.end()
         # Use a writable location (temp dir) for onefile mode
+        candidates = []
         if hasattr(sys, '_MEIPASS'):
-            base = os.path.dirname(sys.executable)
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(base, 'check.png')
-        pm.save(path, 'PNG')
-        return path
+            candidates.append(os.path.join(sys._MEIPASS, 'check.png'))
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'check.png'))
+        candidates.append(os.path.join(os.environ.get('TEMP', '.') or '.', '寒霜工具_check.png'))
+        for path in candidates:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                pm.save(path, 'PNG')
+                if os.path.exists(path):
+                    return path
+            except Exception:
+                continue
+        return None
     except Exception:
         return None
 
@@ -805,25 +791,151 @@ class CompactionWatcher(QObject):
             pass
 
 
+class WorkBuddyMemoryGuard(QObject):
+    """WorkBuddy 云记忆守护。
+
+    背景：WorkBuddy 会把 `~/.workbuddy-ai/memory/<uid>_memory.md` 的 memoryBlock 回写成空
+    （写入方的 profile 不带 version 字段，档案里的版本守卫会被整段跳过），所以注入会被冲掉。
+    这里按 install-workbuddy.ps1 写下的 `.hanshuang-state.json` 定期比对，漂移就重新写回。
+    """
+
+    reinjected = Signal(str)
+
+    INTERVAL_MS = 45000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.INTERVAL_MS)
+        self._timer.timeout.connect(self.check)
+        self._timer.start()
+
+    BLOCK_RE = re.compile(r'## Memory Block\r?\n\r?\n(.*?)\r?\n\r?\n---', re.S)
+
+    def _state(self):
+        for name in ('.workbuddy-ai', '.workbuddy'):
+            p = os.path.join(os.path.expanduser('~'), name, '.hanshuang-state.json')
+            if os.path.exists(p):
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                except Exception:
+                    return None
+        return None
+
+    @staticmethod
+    def _set_readonly(path, ro):
+        try:
+            if ro:
+                os.chmod(path, stat.S_IREAD)
+            else:
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        except Exception:
+            pass
+
+    def _targets(self, st):
+        """目标档案列表：状态文件记录的 + 每次重扫 memory 目录（换机器/换账号 uid 会变）。"""
+        targets = [a for a in (st.get('archives') or []) if a]
+        one = st.get('archive') or ''
+        if one and one not in targets:
+            targets.append(one)
+        mem_dir = st.get('memoryDir') or (os.path.dirname(targets[0]) if targets else '')
+        if mem_dir and os.path.isdir(mem_dir):
+            try:
+                for n in os.listdir(mem_dir):
+                    if n.endswith('_memory.md') and '.bak' not in n:
+                        p = os.path.join(mem_dir, n)
+                        if p not in targets:
+                            targets.append(p)
+            except Exception:
+                pass
+        return targets
+
+    def _write(self, arch, block, st):
+        now = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())
+        ver = st.get('version', 999999)
+        uid = st.get('uid') or ''
+        if os.path.exists(arch):
+            try:
+                with open(arch, 'r', encoding='utf-8') as f:
+                    m = re.search(r'"uid"\s*:\s*"([^"]+)"', f.read())
+                if m:
+                    uid = m.group(1)
+            except Exception:
+                pass
+        if not uid:
+            uid = os.path.basename(arch).replace('_memory.md', '')
+        profile = {'uid': uid, 'memoryBlock': block, 'updatedAt': now, 'version': ver}
+        md = ('# User Memory Profile\n> Last updated: %s\n> Version: %s\n\n## Memory Block\n\n%s\n\n---\n\n'
+              '<!-- RAW_JSON_START\n%s\nRAW_JSON_END -->\n'
+              % (now, ver, block, json.dumps(profile, ensure_ascii=False, indent=2)))
+        os.makedirs(os.path.dirname(arch), exist_ok=True)
+        if os.path.exists(arch):
+            self._set_readonly(arch, False)
+        with open(arch, 'w', encoding='utf-8', newline='') as f:
+            f.write(md)
+        self._set_readonly(arch, True)
+
+    def check(self):
+        st = self._state()
+        if not st:
+            return
+        prompt = st.get('prompt') or ''
+        if not prompt:
+            return
+        src = os.path.join(_res(), prompt)
+        if not os.path.exists(src):
+            return
+        try:
+            with open(src, 'r', encoding='utf-8') as f:
+                block = f.read()
+        except Exception:
+            return
+        fixed = 0
+        for arch in self._targets(st):
+            cur = ''
+            if os.path.exists(arch):
+                try:
+                    with open(arch, 'r', encoding='utf-8') as f:
+                        cur = f.read()
+                except Exception:
+                    cur = ''
+            m = self.BLOCK_RE.search(cur)
+            if m and m.group(1).strip() == block.strip():
+                continue
+            try:
+                self._write(arch, block, st)
+                fixed += 1
+            except Exception:
+                pass
+        if fixed:
+            self.reinjected.emit('检测到 WorkBuddy 云记忆被回写/缺失，已自动补注入 %d 个档案' % fixed)
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__(None)
         self.setObjectName('mainWindow')
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.Window)
-        self.setFixedSize(1080, 660)
+        self.setFixedSize(1640, 660)
         self.setStyleSheet(STYLESHEET)
         screen = QApplication.primaryScreen().availableGeometry()
         x = (screen.width() - self.width()) // 2 + screen.x()
         y = (screen.height() - self.height()) // 2 + screen.y()
         self.move(x, y)
         self._proc = None
+        self._watchdog = None
+        self._proc_output = ''
+        self._timed_out = False
         self._tutorial = None
         self._tray = None
         self._build()
         self._setup_tray()
         self._watcher = CompactionWatcher(self)
         self._watcher.compacted.connect(self._on_compacted)
+        self._wb_guard = WorkBuddyMemoryGuard(self)
+        self._wb_guard.reinjected.connect(self._on_wb_reinjected)
 
     def _config_dir(self):
         return os.path.expanduser('~/.codex')
@@ -854,6 +966,124 @@ class MainWindow(QWidget):
         with open(sp, 'w', encoding='utf-8') as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
 
+    # ---------- PowerShell 进程管理（看门狗 + 日志 + 实时输出） ----------
+
+    INSTALL_TIMEOUT = 300000   # 安装最长 5 分钟（含技能复制），超时强制终止并提示
+    UNINSTALL_TIMEOUT = 120000  # 卸载最长 2 分钟
+
+    def _log_path(self):
+        return os.path.join(os.environ.get('TEMP', '.') or '.', 'fj_tool.log')
+
+    def _append_log(self, label, out):
+        try:
+            with open(self._log_path(), 'a', encoding='utf-8') as f:
+                f.write('\n===== %s %s =====\n%s\n' % (
+                    time.strftime('%Y-%m-%d %H:%M:%S'), label, out[-16000:]))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _ensure_script_ready(path):
+        """运行前强制 UTF-8 BOM。
+
+        打包 exe 会把 .ps1 解到 %TEMP%\\_MEIxxxx 再执行；解包产物若丢了 BOM（杀软改写、
+        二次编辑等），中文注释会按 ANSI 解码成乱码并吞掉引号 → PowerShell 解析报错、
+        退出码 1，现象就是「注入失败」。这里兜住，并把 sha256 记进 fj_tool.log，
+        方便和源文件比对，一眼看出是不是被杀软动过。
+        """
+        try:
+            if not isinstance(path, str) or not path.lower().endswith('.ps1'):
+                return None
+            if not os.path.exists(path):
+                return None
+            with open(path, 'rb') as f:
+                data = f.read()
+            if not data.startswith(b'\xef\xbb\xbf'):
+                with open(path, 'wb') as f:
+                    f.write(b'\xef\xbb\xbf' + data)
+                data = b'\xef\xbb\xbf' + data
+            return hashlib.sha256(data).hexdigest()
+        except Exception:
+            return None
+
+    def _launch_ps(self, args, on_exit, timeout_ms, label):
+        """启动 powershell，带超时看门狗 + 输出捕获；on_exit(out, exit_code, exit_status, timed_out)"""
+        old = self._proc
+        if old is not None and old.state() != QProcess.NotRunning:
+            old.kill()
+            old.waitForFinished(2000)
+        if self._watchdog is not None and self._watchdog.isActive():
+            self._watchdog.stop()
+        self._proc_output = ''
+        self._timed_out = False
+        proc = QProcess(self)
+        self._proc = proc
+        proc.setWorkingDirectory(_res())
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.readyRead.connect(lambda p=proc: self._on_proc_read(p))
+        proc.errorOccurred.connect(lambda e, p=proc: self._on_proc_error(e, p, label))
+        proc.finished.connect(lambda c, s: self._on_proc_finished(on_exit, c, s, label))
+        for a in args:
+            sha = self._ensure_script_ready(a)
+            if sha:
+                self._append_log('脚本指纹 ' + os.path.basename(a), 'sha256=' + sha)
+        cmd = [
+            '-NoLogo', '-NoProfile', '-NonInteractive',
+            # Bypass：分发给别人时脚本文件可能带「来自 Internet」标记，
+            # RemoteSigned 会拒绝未签名脚本导致安装静默失败
+            '-ExecutionPolicy', 'Bypass',
+        ] + args
+        proc.start('powershell.exe', cmd)
+        if not proc.waitForStarted(8000):
+            self._set_buttons_enabled(True)
+            self._set_status(label + ' 启动失败（找不到 powershell.exe）', 'error')
+            return
+        self._watchdog = QTimer(self)
+        self._watchdog.setSingleShot(True)
+        self._watchdog.timeout.connect(lambda p=proc, lb=label: self._on_proc_timeout(p, lb))
+        self._watchdog.start(timeout_ms)
+
+    def _on_proc_read(self, proc):
+        try:
+            txt = bytes(proc.readAll()).decode('utf-8', 'replace')
+        except Exception:
+            return
+        self._proc_output = (self._proc_output + txt)[-30000:]
+        line = txt.strip().splitlines()[-1] if txt.strip() else ''
+        if line and len(line) < 80:
+            self._set_status(line.replace('\r', ''), 'info_none')
+
+    def _on_proc_error(self, err, proc, label):
+        if err == QProcess.FailedToStart:
+            self._set_buttons_enabled(True)
+            self._set_status(label + ' 启动失败（powershell.exe 不可用）', 'error')
+
+    def _on_proc_timeout(self, proc, label):
+        self._timed_out = True
+        self._set_status(label + ' 执行超时，正在强制终止...', 'error')
+        try:
+            pid = proc.processId()
+            subprocess.Popen(['taskkill', '/PID', str(pid), '/T', '/F'],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except Exception:
+            try:
+                if proc.state() != QProcess.NotRunning:
+                    proc.kill()
+            except Exception:
+                pass
+
+    def _on_proc_finished(self, on_exit, ec, es, label):
+        if self._watchdog is not None:
+            self._watchdog.stop()
+        out = self._proc_output
+        self._append_log(label, out)
+        on_exit(out, ec, es, self._timed_out)
+
+    def _tail(self, out, n=4):
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        return '\n'.join(lines[-n:]) if lines else ''
+
     def _set_status(self, text, level=None):
         if level == 'success':
             self._status.setText('● ' + text)
@@ -868,11 +1098,13 @@ class MainWindow(QWidget):
     def _set_buttons_enabled(self, enabled):
         self._card_codex._btn.setEnabled(enabled)
         self._card_zcode._btn.setEnabled(enabled)
+        self._card_cursor._btn.setEnabled(enabled)
         self._card_claude._btn.setEnabled(enabled)
         self._btn_restart.setEnabled(enabled)
         self._btn_reinject.setEnabled(enabled)
         self._btn_uninstall.setEnabled(enabled)
         self._btn_uninstall_zcode.setEnabled(enabled)
+        self._btn_uninstall_cursor.setEnabled(enabled)
         self._btn_uninstall_claude.setEnabled(enabled)
 
     def _build(self):
@@ -928,9 +1160,10 @@ class MainWindow(QWidget):
             '顶尖破甲',
             '适用于 GPT-6.0 / v4 Pro 等顶级模型 · 点击选择版本',
             versions=[
-                ('顶尖破甲 V2', '完整 CTF Lab 2.0 规范 · 身份路由 + 交付标准 + 压缩防护', '寒霜v1.2.md', True),
+                ('顶尖破甲 V4', '最新规范 + 63 模块 V4 专属技能库 · 激活词「寒霜」', '寒霜v4.md', True),
+                ('顶尖破甲 V2', '完整 CTF Lab 2.0 规范 · 身份路由 + 交付标准 + 压缩防护（激活词「海鸥 / 启动」）', '寒霜v1.2.md', False),
                 ('顶尖破甲 V3', '寒霜工作规范 · 硬拒绝场景覆盖 + 拒绝话术全清单 + 过程进度播报', '寒霜v3.md', False),
-                ('顶尖破甲 v1', '旧版顶尖提示词 · 完整工程规范 · 项目类型分类 + 两阶段交付', '寒霜-变体B-v3-英文.md', False),
+                ('顶尖破甲 v1', '旧版顶尖提示词 · 完整工程规范 · 项目类型分类 + 两阶段交付（英文版）', '寒霜-变体B-v3-英文.md', False),
             ]
         )
         self._card_codex.install_requested.connect(self._run_install)
@@ -943,12 +1176,34 @@ class MainWindow(QWidget):
         col_zcode.addWidget(sec_zcode)
         self._card_zcode = InstallCard(
             'zcode破甲v2',
-            '提示词 + 系统记忆 + 系统提示词',
-            'zcode'
+            '提示词 + 系统记忆 + 系统提示词 · 点击选择版本',
+            '',
+            versions=[
+                ('ZCode 破甲 V4', '最新规范 → AGENTS.md + 全局记忆 + 系统提示词 + V4 技能库', '寒霜v4.md', True),
+                ('ZCode 破甲 V2', 'CTF Lab 2.0 完整规范（海鸥版）→ 提示词 + 记忆 + 系统提示词（激活词「海鸥 / 启动」）', '寒霜v1.2.md', False),
+                ('ZCode 破甲 V3', '寒霜工作规范 v3 → AGENTS.md + 全局记忆 + 系统提示词', '寒霜v3.md', False),
+            ]
         )
         self._card_zcode.install_requested.connect(self._run_zcode_install)
         col_zcode.addWidget(self._card_zcode, 1)
         content.addLayout(col_zcode, 1)
+        col_cursor = QVBoxLayout()
+        col_cursor.setSpacing(8)
+        sec_cursor = QLabel('Cursor破甲')
+        sec_cursor.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
+        col_cursor.addWidget(sec_cursor)
+        self._card_cursor = InstallCard(
+            'Cursor 破甲',
+            '寒霜工作规范注入 Cursor 全局规则（User Rules）· 卸载可还原 · 点击选择版本',
+            '',
+            versions=[
+                ('Cursor 破甲 V4', '寒霜 v4 规范注入 Cursor 全局规则（推荐）', '寒霜v4.md', True),
+                ('Cursor 破甲 V3', '寒霜 v3 规范注入 Cursor 全局规则', '寒霜v3.md', False),
+            ]
+        )
+        self._card_cursor.install_requested.connect(self._run_cursor_install)
+        col_cursor.addWidget(self._card_cursor, 1)
+        content.addLayout(col_cursor, 1)
         col_claude = QVBoxLayout()
         col_claude.setSpacing(8)
         sec_claude = QLabel('Claude破甲')
@@ -956,12 +1211,37 @@ class MainWindow(QWidget):
         col_claude.addWidget(sec_claude)
         self._card_claude = InstallCard(
             'Claude 破甲',
-            '寒霜工作规范注入 ~/.claude/CLAUDE.md · 备份原文件可卸载恢复',
-            'claude'
+            '寒霜工作规范注入 ~/.claude/CLAUDE.md · 备份原文件可卸载恢复 · 点击选择版本',
+            '',
+            versions=[
+                ('Claude 破甲 V4', '寒霜工作规范 v4（CLAUDE.md 版）· 自动安装 V4 专属技能', '寒霜v4-claude.md', True),
+                ('Claude 破甲 V3', '寒霜工作规范 v3 · Claude Code 版', '寒霜v3.md', False),
+            ]
         )
         self._card_claude.install_requested.connect(self._run_claude_install)
         col_claude.addWidget(self._card_claude, 1)
         content.addLayout(col_claude, 1)
+        col_wb = QVBoxLayout()
+        col_wb.setSpacing(8)
+        sec_wb = QLabel('WorkBuddy破甲（国际版）')
+        sec_wb.setStyleSheet('font-size: 14px; font-weight: 600; color: ' + TEXT_SECONDARY + ';')
+        col_wb.addWidget(sec_wb)
+        self._card_wb = InstallCard(
+            'WorkBuddy 破甲（国际版）',
+            '适用国际版：数据目录 .workbuddy-ai，endpoint www.workbuddy.ai（安装时自动判定并显示版本）'
+            ' · 注入账号级云记忆(memoryBlock，每轮自动进系统提示词) + 文件记忆 + V4 技能库'
+            ' · 只读锁防回写 · 守护自动补注入'
+            ' · 国版(数据目录 .workbuddy)请在脚本后用 -ConfigDir 指定',
+            '',
+            versions=[
+                ('WorkBuddy 国际版 V4', '寒霜 v4 → 云记忆 + MEMORY.md + 63 技能库（推荐）', '寒霜v4.md', True),
+                ('WorkBuddy 国际版 V3', '寒霜 v3 → 云记忆 + MEMORY.md + 技能库', '寒霜v3.md', False),
+                ('WorkBuddy 国际版 V2', '海鸥 CTF Lab 2.0 → 云记忆 + MEMORY.md + 技能库', '寒霜v1.2.md', False),
+            ]
+        )
+        self._card_wb.install_requested.connect(self._run_workbuddy_install)
+        col_wb.addWidget(self._card_wb, 1)
+        content.addLayout(col_wb, 1)
         root.addLayout(content, 1)
 
         auto_row = QHBoxLayout()
@@ -1011,6 +1291,16 @@ class MainWindow(QWidget):
         self._btn_uninstall_claude.setFixedHeight(46)
         self._btn_uninstall_claude.clicked.connect(self._uninstall_claude)
         btn_row.addWidget(self._btn_uninstall_claude, 1)
+        self._btn_uninstall_cursor = QPushButton('卸载 Cursor')
+        self._btn_uninstall_cursor.setProperty('class', 'btnDanger')
+        self._btn_uninstall_cursor.setFixedHeight(46)
+        self._btn_uninstall_cursor.clicked.connect(self._uninstall_cursor)
+        btn_row.addWidget(self._btn_uninstall_cursor, 1)
+        self._btn_uninstall_wb = QPushButton('卸载 WorkBuddy(国际版)')
+        self._btn_uninstall_wb.setProperty('class', 'btnDanger')
+        self._btn_uninstall_wb.setFixedHeight(46)
+        self._btn_uninstall_wb.clicked.connect(self._uninstall_workbuddy)
+        btn_row.addWidget(self._btn_uninstall_wb, 1)
         root.addLayout(btn_row)
 
         div2 = QFrame()
@@ -1026,6 +1316,9 @@ class MainWindow(QWidget):
         self._watch_label = QLabel('● 压缩守护: 运行中')
         self._watch_label.setStyleSheet('font-size: 12px; color: ' + SUCCESS + ';')
         footer.addWidget(self._watch_label)
+        self._wb_label = QLabel('● WorkBuddy(国际版) 记忆守护: 运行中')
+        self._wb_label.setStyleSheet('font-size: 12px; color: ' + SUCCESS + ';')
+        footer.addWidget(self._wb_label)
         footer.addStretch(1)
         qb = QPushButton('加入QQ群')
         qb.setProperty('class', 'btnLink')
@@ -1051,84 +1344,203 @@ class MainWindow(QWidget):
             return
         self._set_status('正在安装 ' + prompt_filename + '...')
         self._set_buttons_enabled(False)
-        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
-            self._proc.kill()
-            self._proc.waitForFinished(2000)
-        proc = QProcess(self)
-        self._proc = proc
-        proc.setWorkingDirectory(base)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.finished.connect(lambda c, s: self._on_install_done(prompt_filename, c, s))
-        proc.start('powershell.exe', [
-            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
-            '-File', install_ps1,
-            '-SourcePrompt', prompt_path
-        ])
+        args = ['-File', install_ps1, '-SourcePrompt', prompt_path]
+        if prompt_filename == '寒霜v4.md':
+            args += ['-SkillsSource', 'codex-skills-v4']
+        self._launch_ps(args, lambda out, c, s, to: self._on_install_done(prompt_filename, c, s, out, to),
+                        self.INSTALL_TIMEOUT, '安装 ' + prompt_filename)
 
-    def _run_zcode_install(self, _tag):
+    def _on_install_done(self, pf, ec, es, out, timed_out):
+        self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status(pf + ' 安装超时已终止 - 若反复超时，请暂时关闭杀软实时监控后重试（日志: %TEMP%\\fj_tool.log）', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            self._install_codex_memory()
+            n = self._count_managed_skills()
+            if n > 0:
+                self._set_status(pf + ' 破甲成功 - 已启用 ' + str(n) + ' 个 skills - 重启 Codex 生效', 'success')
+            else:
+                self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
+            if pf == '寒霜v4.md':
+                self._card_codex.set_installed(True, 'V4')
+            elif pf == '寒霜v1.2.md':
+                self._card_codex.set_installed(True, 'V2')
+            elif pf == '寒霜v3.md':
+                self._card_codex.set_installed(True, 'V3')
+            elif pf == '寒霜-变体B-v3-英文.md':
+                self._card_codex.set_installed(True, 'v1')
+        else:
+            tail = self._tail(out)
+            self._set_status(pf + ' 失败 (退出码 ' + str(ec) + ') - ' + tail, 'error')
+
+    def _run_zcode_install(self, prompt_filename):
         base = _res()
         install_ps1 = os.path.join(base, 'install-zcode.ps1')
+        prompt_filename = str(prompt_filename or '寒霜v4.md')
+        prompt_path = os.path.join(base, prompt_filename)
         if not os.path.exists(install_ps1):
             self._set_status('找不到 install-zcode.ps1', 'error')
             return
-        self._set_status('正在注入 ZCode（提示词 + 记忆 + 系统提示词）...')
+        if not os.path.exists(prompt_path):
+            self._set_status('找不到 ' + prompt_filename, 'error')
+            return
+        self._set_status('正在注入 ZCode（' + prompt_filename + '：提示词 + 记忆 + 系统提示词）...')
         self._set_buttons_enabled(False)
-        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
-            self._proc.kill()
-            self._proc.waitForFinished(2000)
-        proc = QProcess(self)
-        self._proc = proc
-        proc.setWorkingDirectory(base)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.finished.connect(lambda c, s: self._on_zcode_install_done(c, s))
-        proc.start('powershell.exe', [
-            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
-            '-File', install_ps1, '-PatchSystemPrompt'
-        ])
+        # 记忆内容与所选版本保持一致，避免提示词和记忆互相矛盾
+        args = ['-File', install_ps1, '-PatchSystemPrompt',
+                '-SourcePrompt', prompt_path, '-MemorySourcePrompt', prompt_path]
+        if prompt_filename == '寒霜v4.md':
+            args += ['-SkillsSource', 'codex-skills-v4']
+        self._launch_ps(args,
+                        lambda out, c, s, to: self._on_zcode_install_done(prompt_filename, c, s, out, to),
+                        self.INSTALL_TIMEOUT, 'ZCode 注入')
 
-    def _on_zcode_install_done(self, ec, es):
+    def _on_zcode_install_done(self, prompt_filename, ec, es, out, timed_out):
         self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('ZCode 注入超时已终止 - 若反复超时，请暂时关闭杀软实时监控后重试', 'error')
+            return
         ok = (es == QProcess.NormalExit and ec == 0)
+        tag = {'寒霜v4.md': 'V4', '寒霜v3.md': 'V3', '寒霜v1.2.md': 'V2'}.get(prompt_filename, 'V4')
         if ok:
-            self._card_zcode.set_installed(True)
-            self._set_status('ZCode 注入成功 - 重启 ZCode 生效', 'success')
+            # 真实校验：AGENTS.md + 记忆文件是否真的写入成功
+            missing = self._zcode_missing()
+            if missing:
+                self._set_status('ZCode 注入不完整，缺少: ' + '; '.join(missing), 'error')
+            else:
+                self._card_zcode.set_installed(True, tag)
+                self._set_status('ZCode ' + tag + ' 注入成功 - 重启 ZCode 生效', 'success')
         else:
-            self._set_status('ZCode 注入失败 (退出码 ' + str(ec) + ')', 'error')
+            tail = self._tail(out)
+            self._set_status('ZCode 注入失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
 
-    def _run_claude_install(self, _tag):
+    def _zcode_missing(self):
+        """安装后校验：应存在的注入文件是否都在。返回缺失项列表，空 = 完整。"""
+        r = []
+        zhome = os.path.join(os.path.expanduser('~'), '.zcode')
+        agents = os.path.join(zhome, 'AGENTS.md')
+        try:
+            if not (os.path.exists(agents) and re.search(
+                    'CTF-LAB|寒霜|Seagull',
+                    open(agents, 'r', encoding='utf-8', errors='ignore').read())):
+                r.append('AGENTS.md')
+        except Exception:
+            r.append('AGENTS.md')
+        mem = os.path.join(zhome, 'cli', 'memories', 'global', 'memory', 'seagull-agents.md')
+        if not os.path.exists(mem):
+            r.append('记忆文件 seagull-agents.md')
+        return r
+
+    def _zcode_residue(self):
+        """校验 ZCode 注入痕迹残留（安装/卸载后调用）。返回残留项列表，空 = 干净。"""
+        r = []
+        zhome = os.path.join(os.path.expanduser('~'), '.zcode')
+        agents = os.path.join(zhome, 'AGENTS.md')
+        try:
+            if os.path.exists(agents) and re.search('CTF-LAB|寒霜|Seagull',
+                                                    open(agents, 'r', encoding='utf-8', errors='ignore').read()):
+                r.append('AGENTS.md 仍被注入')
+        except Exception:
+            pass
+        mem = os.path.join(zhome, 'cli', 'memories', 'global', 'memory', 'seagull-agents.md')
+        if os.path.exists(mem):
+            r.append('记忆文件 seagull-agents.md 仍存在')
+        return r
+
+    def _run_claude_install(self, prompt_filename):
         base = _res()
         install_ps1 = os.path.join(base, 'install-claude.ps1')
-        prompt_path = os.path.join(base, '寒霜v3.md')
+        prompt_filename = str(prompt_filename or '寒霜v3.md')
+        prompt_path = os.path.join(base, prompt_filename)
         if not os.path.exists(install_ps1):
             self._set_status('找不到 install-claude.ps1', 'error')
             return
         if not os.path.exists(prompt_path):
-            self._set_status('找不到 寒霜v3.md', 'error')
+            self._set_status('找不到 ' + prompt_filename, 'error')
             return
         self._set_status('正在注入 Claude（~/.claude/CLAUDE.md）...')
         self._set_buttons_enabled(False)
-        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
-            self._proc.kill()
-            self._proc.waitForFinished(2000)
-        proc = QProcess(self)
-        self._proc = proc
-        proc.setWorkingDirectory(base)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.finished.connect(lambda c, s: self._on_claude_install_done(c, s))
-        proc.start('powershell.exe', [
-            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
-            '-File', install_ps1,
-            '-SourcePrompt', prompt_path
-        ])
+        args = ['-File', install_ps1, '-SourcePrompt', prompt_path]
+        if prompt_filename == '寒霜v4-claude.md':
+            args += ['-SkillsSource', 'codex-skills-v4']
+        self._launch_ps(args, lambda out, c, s, to: self._on_claude_install_done(prompt_filename, c, s, out, to),
+                        self.INSTALL_TIMEOUT, 'Claude 注入')
 
-    def _on_claude_install_done(self, ec, es):
+    def _on_claude_install_done(self, prompt_filename, ec, es, out, timed_out):
         self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('Claude 注入超时已终止 - 若反复超时，请暂时关闭杀软实时监控后重试', 'error')
+            return
         ok = (es == QProcess.NormalExit and ec == 0)
         if ok:
-            self._card_claude.set_installed(True)
-            self._set_status('Claude 注入成功 - 重启 Claude Code 生效', 'success')
+            tag = 'V4' if prompt_filename == '寒霜v4-claude.md' else 'V3'
+            self._card_claude.set_installed(True, tag)
+            self._set_status('Claude ' + tag + ' 注入成功 - 重启 Claude Code 生效', 'success')
         else:
-            self._set_status('Claude 注入失败 (退出码 ' + str(ec) + ')', 'error')
+            tail = self._tail(out)
+            self._set_status('Claude 注入失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
+
+    def _run_cursor_install(self, prompt_filename):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-cursor.ps1')
+        prompt_filename = str(prompt_filename or '寒霜v4.md')
+        prompt_path = os.path.join(base, prompt_filename)
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-cursor.ps1', 'error')
+            return
+        if not os.path.exists(prompt_path):
+            self._set_status('找不到 ' + prompt_filename, 'error')
+            return
+        self._set_status('正在注入 Cursor（全局 User Rules，新文件夹自动生效）...')
+        self._set_buttons_enabled(False)
+        self._launch_ps(['-File', install_ps1, '-SourcePrompt', prompt_path],
+                        lambda out, c, s, to: self._on_cursor_install_done(prompt_filename, c, s, out, to),
+                        self.INSTALL_TIMEOUT, 'Cursor 注入')
+
+    def _on_cursor_install_done(self, prompt_filename, ec, es, out, timed_out):
+        self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('Cursor 注入超时已终止 - 请重启 Cursor 后再试（日志: %TEMP%\\fj_tool.log）', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            tag = 'V4' if prompt_filename == '寒霜v4.md' else 'V3'
+            self._card_cursor.set_installed(True, tag)
+            self._set_status('Cursor ' + tag + ' 注入成功 - 重启 Cursor 后新开任意文件夹都会自动加载', 'success')
+        elif ec == 2:
+            self._card_cursor.set_installed(False)
+            tail = self._tail(out)
+            self._set_status('Cursor 部分写入成功（主路径被占用或权限不足）: ' + tail, 'error')
+        else:
+            tail = self._tail(out)
+            self._set_status('Cursor 注入失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
+
+    def _uninstall_cursor(self):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-cursor.ps1')
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-cursor.ps1', 'error')
+            return
+        self._set_status('正在卸载 Cursor 注入...')
+        self._set_buttons_enabled(False)
+        self._launch_ps(['-File', install_ps1, '-Uninstall'],
+                        lambda out, c, s, to: self._on_cursor_uninstall_done(c, s, out, to),
+                        self.UNINSTALL_TIMEOUT, 'Cursor 卸载')
+
+    def _on_cursor_uninstall_done(self, ec, es, out, timed_out):
+        self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('Cursor 卸载超时已终止 - 请重启 Cursor 后再试', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            self._card_cursor.set_installed(False)
+            self._set_status('Cursor 注入已卸载', 'success')
+        else:
+            tail = self._tail(out)
+            self._set_status('Cursor 卸载失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
 
     def _uninstall_claude(self):
         base = _res()
@@ -1138,20 +1550,22 @@ class MainWindow(QWidget):
             return
         self._set_status('正在卸载 Claude 注入...')
         self._set_buttons_enabled(False)
-        proc = QProcess(self)
-        self._proc = proc
-        proc.setWorkingDirectory(base)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.finished.connect(lambda c, s: self._on_claude_uninstall_done(c, s))
-        proc.start('powershell.exe', [
-            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
-            '-File', install_ps1, '-Uninstall'
-        ])
+        self._launch_ps(['-File', install_ps1, '-Uninstall'],
+                        lambda out, c, s, to: self._on_claude_uninstall_done(c, s, out, to),
+                        self.UNINSTALL_TIMEOUT, 'Claude 卸载')
 
-    def _on_claude_uninstall_done(self, ec, es):
+    def _on_claude_uninstall_done(self, ec, es, out, timed_out):
         self._set_buttons_enabled(True)
-        self._card_claude.set_installed(False)
-        self._set_status('Claude 注入已卸载', 'success')
+        if timed_out:
+            self._set_status('Claude 卸载超时已终止 - 请重启后再试', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            self._card_claude.set_installed(False)
+            self._set_status('Claude 注入已卸载', 'success')
+        else:
+            tail = self._tail(out)
+            self._set_status('Claude 卸载失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
 
     def _uninstall_zcode(self):
         base = _res()
@@ -1161,31 +1575,126 @@ class MainWindow(QWidget):
             return
         self._set_status('正在卸载 ZCode 注入...')
         self._set_buttons_enabled(False)
-        proc = QProcess(self)
-        self._proc = proc
-        proc.setWorkingDirectory(base)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.finished.connect(lambda c, s: self._on_zcode_uninstall_done(c, s))
-        proc.start('powershell.exe', [
-            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
-            '-File', install_ps1, '-Uninstall'
-        ])
+        self._launch_ps(['-File', install_ps1, '-Uninstall'],
+                        lambda out, c, s, to: self._on_zcode_uninstall_done(c, s, out, to),
+                        self.UNINSTALL_TIMEOUT, 'ZCode 卸载')
 
-    def _on_zcode_uninstall_done(self, ec, es):
+    def _on_zcode_uninstall_done(self, ec, es, out, timed_out):
         self._set_buttons_enabled(True)
-        self._card_zcode.set_installed(False)
-        self._set_status('ZCode 注入已卸载', 'success')
+        if timed_out:
+            self._set_status('ZCode 卸载超时已终止 - 请重启 ZCode 后再试', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            # 真实校验：AGENTS.md / 记忆 / 系统提示词是否真的还原
+            residue = self._zcode_residue()
+            if '系统提示词 zcode.cjs 仍被注入' in out:
+                residue.append('系统提示词 zcode.cjs 仍被注入')
+            if residue:
+                self._set_status('ZCode 卸载不完整，残留: ' + '; '.join(residue), 'error')
+            else:
+                self._card_zcode.set_installed(False)
+                self._set_status('ZCode 注入已彻底卸载 - 重启 ZCode 恢复原样', 'success')
+        else:
+            tail = self._tail(out)
+            self._set_status('ZCode 卸载失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
+
+    def _run_workbuddy_install(self, prompt_filename):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-workbuddy.ps1')
+        prompt_filename = str(prompt_filename or '寒霜v4.md')
+        prompt_path = os.path.join(base, prompt_filename)
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-workbuddy.ps1', 'error')
+            return
+        if not os.path.exists(prompt_path):
+            self._set_status('找不到 ' + prompt_filename, 'error')
+            return
+        self._set_status('正在注入 WorkBuddy 国际版（云记忆 memoryBlock + 文件记忆 + 技能库）...')
+        self._set_buttons_enabled(False)
+        args = ['-File', install_ps1, '-SourcePrompt', prompt_path]
+        if prompt_filename in ('寒霜v4.md', '寒霜v3.md'):
+            args += ['-SkillsSource', 'codex-skills-v4']
+        self._launch_ps(args,
+                        lambda out, c, s, to: self._on_workbuddy_install_done(prompt_filename, c, s, out, to),
+                        self.INSTALL_TIMEOUT, 'WorkBuddy 注入')
+
+    def _on_workbuddy_install_done(self, prompt_filename, ec, es, out, timed_out):
+        self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('WorkBuddy 注入超时已终止 - 若反复超时，请暂时关闭杀软实时监控后重试（日志: %TEMP%\\fj_tool.log）', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0) and ('[中断]' not in out)
+        tag = {'寒霜v4.md': 'V4', '寒霜v3.md': 'V3', '寒霜v1.2.md': 'V2'}.get(prompt_filename, 'V4')
+        if ok:
+            self._card_wb.set_installed(True, tag)
+            n = self._count_workbuddy_skills()
+            self._set_status('WorkBuddy 国际版 ' + tag + ' 注入成功（云记忆 + ' + str(n) + ' skills）- 重启 WorkBuddy 生效',
+                             'success')
+        else:
+            tail = self._tail(out)
+            self._set_status('WorkBuddy(国际版) 注入失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
+
+    def _count_workbuddy_skills(self):
+        for name in ('.workbuddy-ai', '.workbuddy'):
+            sk = os.path.join(os.path.expanduser('~'), name, 'skills')
+            if os.path.isdir(sk):
+                try:
+                    return sum(1 for d in os.listdir(sk)
+                               if os.path.isdir(os.path.join(sk, d)) and
+                               os.path.exists(os.path.join(sk, d, 'SKILL.md')))
+                except Exception:
+                    return 0
+        return 0
+
+    def _uninstall_workbuddy(self):
+        base = _res()
+        install_ps1 = os.path.join(base, 'install-workbuddy.ps1')
+        if not os.path.exists(install_ps1):
+            self._set_status('找不到 install-workbuddy.ps1', 'error')
+            return
+        self._set_status('正在卸载 WorkBuddy 注入（记忆 + 开关 + skills）...')
+        self._set_buttons_enabled(False)
+        self._launch_ps(['-File', install_ps1, '-Uninstall'],
+                        lambda out, c, s, to: self._on_workbuddy_uninstall_done(c, s, out, to),
+                        self.UNINSTALL_TIMEOUT, 'WorkBuddy 卸载')
+
+    def _on_workbuddy_uninstall_done(self, ec, es, out, timed_out):
+        self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('WorkBuddy 卸载超时已终止 - 请手动运行 install-workbuddy.ps1 -Uninstall', 'error')
+            return
+        ok = (es == QProcess.NormalExit and ec == 0)
+        if ok:
+            self._card_wb.set_installed(False)
+            self._set_status('WorkBuddy 注入已彻底卸载（云记忆清空 + 开关还原 + skills 移除）- 重启 WorkBuddy 恢复原样',
+                             'success')
+        else:
+            tail = self._tail(out)
+            self._set_status('WorkBuddy(国际版) 卸载失败 (退出码 ' + str(ec) + '): ' + tail, 'error')
+
+    def _on_wb_reinjected(self, msg):
+        try:
+            self._wb_label.setText('● WorkBuddy 记忆守护: 已补注入')
+        except Exception:
+            pass
+        self._set_status(msg, 'success')
 
     def _count_managed_skills(self):
         """Count managed skills currently present in ~/.codex/skills."""
         try:
             base = _res()
-            src = os.path.join(base, 'codex-skills')
-            if not os.path.isdir(src):
+            names = set()
+            for src_name in ('codex-skills', 'codex-skills-v4'):
+                src = os.path.join(base, src_name)
+                if not os.path.isdir(src):
+                    continue
+                for d in os.listdir(src):
+                    if os.path.isdir(os.path.join(src, d)) and \
+                            os.path.exists(os.path.join(src, d, 'SKILL.md')):
+                        names.add(d)
+            if not names:
                 return 0
-            names = [d for d in os.listdir(src)
-                     if os.path.isdir(os.path.join(src, d))
-                     and os.path.exists(os.path.join(src, d, 'SKILL.md'))]
             sk = os.path.join(self._config_dir(), 'skills')
             if not os.path.isdir(sk):
                 return 0
@@ -1193,10 +1702,13 @@ class MainWindow(QWidget):
         except Exception:
             return 0
     def _install_codex_memory(self):
-        """Install the full AGENTS.md (寒霜v1.2.md) into Codex memories (append, dedupe)."""
+        """把当前注入版本的提示词写入 Codex 记忆（与装的版本保持一致，追加去重）。"""
         try:
             base = _res()
-            prompt_path = os.path.join(base, '寒霜v1.2.md')
+            # 与 config.toml 当前生效的版本保持一致，避免提示词与记忆内容互相矛盾
+            prompt_path = os.path.join(base, self._active_prompt_file() or '寒霜v4.md')
+            if not os.path.exists(prompt_path):
+                prompt_path = os.path.join(base, '寒霜v4.md')
             if not os.path.exists(prompt_path):
                 return
             codex_mem = os.path.join(self._config_dir(), 'memories')
@@ -1217,44 +1729,25 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
-    def _on_install_done(self, pf, ec, es):
-        self._set_buttons_enabled(True)
-        ok = (es == QProcess.NormalExit and ec == 0)
-        if ok:
-            self._install_codex_memory()
-            n = self._count_managed_skills()
-            if n > 0:
-                self._set_status(pf + ' 破甲成功 - 已启用 ' + str(n) + ' 个 skills - 重启 Codex 生效', 'success')
-            else:
-                self._set_status(pf + ' 破甲成功 - 重启 Codex 生效', 'success')
-            if pf == '寒霜v1.2.md':
-                self._card_codex.set_installed(True, 'V2')
-            elif pf == '寒霜v3.md':
-                self._card_codex.set_installed(True, 'V3')
-            elif pf == '寒霜-变体B-v3-英文.md':
-                self._card_codex.set_installed(True, 'v1')
-        else:
-            self._set_status(pf + ' 失败 (退出码 ' + str(ec) + ')', 'error')
 
-    def _reinject(self):
-        """Re-run install with the currently active variant (after compaction)."""
+    def _active_prompt_file(self):
+        """读取 config.toml，返回当前已注入的提示词文件名（识别失败返回 None）。"""
         cp = os.path.join(self._config_dir(), 'config.toml')
+        ct = ''
         if os.path.exists(cp):
             try:
                 with open(cp, 'r', encoding='utf-8') as f:
                     ct = f.read()
-                if '寒霜v1.2' in ct:
-                    self._run_install('寒霜v1.2.md')
-                    return
-                if '寒霜v3' in ct:
-                    self._run_install('寒霜v3.md')
-                    return
-                if '寒霜-变体B' in ct:
-                    self._run_install('寒霜-变体B-v3-英文.md')
-                    return
             except Exception:
-                pass
-        self._run_install('寒霜v1.2.md')
+                ct = ''
+        for name in ('寒霜v4.md', '寒霜v3.md', '寒霜-变体B-v3-英文.md', '寒霜v1.2.md'):
+            if name in ct:
+                return name
+        return None
+
+    def _reinject(self):
+        """Re-run install with the currently active variant (after compaction)."""
+        self._run_install(self._active_prompt_file() or '寒霜v4.md')
 
     def _on_compacted(self, path):
         # 防抖：压缩信号可能连续触发，避免重复注入
@@ -1284,27 +1777,25 @@ class MainWindow(QWidget):
             return
         self._set_status('正在卸载...')
         self._set_buttons_enabled(False)
-        proc = QProcess(self)
-        self._proc = proc
-        proc.setWorkingDirectory(base)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.finished.connect(lambda c, s: self._on_uninstall_done(c, s))
-        proc.start('powershell.exe', [
-            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
-            '-File', install_ps1, '-Uninstall'
-        ])
+        self._launch_ps(['-File', install_ps1, '-Uninstall'],
+                        lambda out, c, s, to: self._on_uninstall_done(c, s, out, to),
+                        self.UNINSTALL_TIMEOUT, 'Codex 卸载')
 
-    def _on_uninstall_done(self, ec, es):
+    def _on_uninstall_done(self, ec, es, out, timed_out):
         self._set_buttons_enabled(True)
+        if timed_out:
+            self._set_status('卸载超时已终止 - 请关闭 Codex 后重试（config.toml 可能未还原）', 'error')
+            return
         # 无论退出码如何，都重新读取 config.toml 判断注入行是否真的被清除
+        # （检测任意受管提示词：v1.2 / v3 / v4 / 富江 等，不能只看某一个文件名）
         still_injected = False
         cp = os.path.join(self._config_dir(), 'config.toml')
         if os.path.exists(cp):
             try:
                 with open(cp, 'r', encoding='utf-8') as f:
                     ct = f.read()
-                still_injected = ('model_instructions_file' in ct
-                                  and '寒霜v1.2' in ct)
+                m = re.search(r'(?m)^\s*model_instructions_file\s*=\s*"([^"]+)"', ct)
+                still_injected = bool(m and 'managed-prompts' in m.group(1))
             except Exception:
                 pass
         if not still_injected:
@@ -1400,23 +1891,19 @@ class MainWindow(QWidget):
             event.accept()
 
     def auto_install(self):
-        cp = os.path.join(self._config_dir(), 'config.toml')
-        if not os.path.exists(cp):
-            self._run_install('寒霜v1.2.md')
-            return
-        with open(cp, 'r', encoding='utf-8') as f:
-            ct = f.read()
-        if '寒霜v1.2' in ct:
-            self._run_install('寒霜v1.2.md')
-        else:
-            self._run_install('寒霜v1.2.md')
+        # 已在用哪个版本就续用哪个；没有则默认装最新 V4（不是最老的 v1.2）
+        self._run_install(self._active_prompt_file() or '寒霜v4.md')
 
 
 def main():
     if not _security_gate():
         sys.exit(1)
     app = QApplication(sys.argv)
-    _create_check_png()
+    png = _create_check_png()
+    if png:
+        global STYLESHEET
+        # 绝对路径引用勾选图标：换电脑后工作目录不同也能正常显示
+        STYLESHEET = STYLESHEET.replace('url(check.png)', 'url("' + png.replace('\\', '/') + '")')
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -1424,6 +1911,18 @@ def main():
     probe.connectToServer('fj_codex_tool_v2')
     if probe.waitForConnected(150):
         probe.disconnectFromServer()
+        # 已有实例在运行：尝试把它带到前台，避免“双击无任何反应”
+        try:
+            import ctypes
+            _u32 = ctypes.windll.user32
+            _hwnd = _u32.FindWindowW(None, APP_NAME)
+            if not _hwnd:
+                _hwnd = _u32.FindWindowW(None, '寒霜破甲工具')
+            if _hwnd:
+                _u32.ShowWindow(_hwnd, 9)   # SW_RESTORE
+                _u32.SetForegroundWindow(_hwnd)
+        except Exception:
+            pass
         return 0
     server = QLocalServer()
     server.removeServer('fj_codex_tool_v2')

@@ -8,6 +8,7 @@ env/
 
 # Build artifacts
 dist/
+build_log*.txt
 
 # Backup files
 *.bak

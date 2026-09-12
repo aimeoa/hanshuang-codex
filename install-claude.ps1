@@ -2,13 +2,22 @@
 param(
     [string]$SourcePrompt,
     [string]$ClaudeHome,
+    [string]$SkillsSource,
     [switch]$Uninstall
 )
 
 Set-StrictMode -Off
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
+
+# 顶层错误捕获：任何失败打印原因并以非零码退出，界面能立即看到真实错误
+trap {
+    Write-Host ("寒霜工具错误: " + $_.Exception.Message) -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor Red
+    exit 1
+}
 
 function Read-Utf8([string]$Path) {
     return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
@@ -25,7 +34,12 @@ $claudeMd = Join-Path $ClaudeHome 'CLAUDE.md'
 $managedDir = Join-Path $ClaudeHome 'managed-prompts'
 $backupPath = Join-Path $managedDir 'CLAUDE.md.bak'
 $marker = '<!-- HANSHUANG-INJECT:BEGIN -->'
-$skillsSource = Join-Path $PSScriptRoot 'codex-skills'
+if ([string]::IsNullOrWhiteSpace($SkillsSource)) {
+    $SkillsSource = Join-Path $PSScriptRoot 'codex-skills'
+} else {
+    $SkillsSource = Join-Path $PSScriptRoot $SkillsSource
+}
+$skillsSource = $SkillsSource
 $skillsTarget = Join-Path $ClaudeHome 'skills'
 $skillsManifestKey = 'installedSkills'
 
@@ -45,7 +59,8 @@ function Install-Skills {
         if (Test-Path -LiteralPath $dest) {
             Remove-Item -LiteralPath $dest -Recurse -Force
         }
-        Copy-Item -LiteralPath $d.FullName -Destination $dest -Recurse -Force
+        robocopy $d.FullName $dest /E /MT:16 /R:1 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "robocopy failed for $($d.FullName)" }
         $installed += $d.Name
     }
     return $installed

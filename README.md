@@ -1,57 +1,67 @@
-# hanshuang Codex 破甲工具 (Hanshuang-Codex)
+# hanshuang Codex 破甲工具 (Hanshuang-Codex) · V4.2
 
-OpenAI Codex CLI 破甲框架 — Python + PySide6 桌面应用。
+多端破甲框架 — Python + PySide6 桌面应用。
 
-通过一键部署将寒霜指令集注入 Codex `config.toml`（`model_instructions_file`），在对话管道中启用竞赛沙箱模式。双变体指令集（flash / 变体B）适配不同档位模型。
+一键把寒霜指令集注入五类目标端（Codex CLI、ZCode、Cursor、Claude Code、WorkBuddy），并同步部署 V4 专属技能库。所有注入均先备份原文件，卸载即还原，无残留。
 
 ## 架构
 
 ```
-寒霜桌面端 (PySide6)
+寒霜破甲工具 (PySide6)
     │
-    ├─ M1 Installer (install.ps1)
-    │     config.toml 备份 → model_instructions_file 注入 → 恢复
+    ├─ Codex 顶尖模型    install.ps1            config.toml → model_instructions_file
+    ├─ ZCode 破甲        install-zcode.ps1      AGENTS.md + 全局记忆 + 系统提示词
+    ├─ Cursor 破甲       install-cursor.ps1     Cursor 全局规则（User Rules）
+    ├─ Claude 破甲       install-claude.ps1     ~/.claude/CLAUDE.md + skills
+    └─ WorkBuddy 破甲    install-workbuddy.ps1  云记忆 memoryBlock + MEMORY.md + 技能库
     │
-    ├─ M2 指令集 (寒霜-flash-v2.md / 寒霜-变体B-v3-英文.md)
-    │     意图映射 → 作用域规则 → 硬性输出规则 → 执行连续性
+    ├─ 指令集 (寒霜v4.md / 寒霜v4-claude.md)
+    │     激活词 → 授权 → 执行 → 证据与输出 → 进度播报 → 硬拒绝场景覆盖
     │
-    ├─ M3 防护层
-    │     反调试 / 反虚拟机 / 完整性校验
+    ├─ 技能库
+    │     codex-skills-v4/ (63 模块) · codex-skills/ (59 模块)
     │
-    └─ M4 桌面端
-          悬浮窗 / 系统托盘 / 一键重启 Codex / 自动安装
-    │
-    ▼
-Codex CLI (config.toml → model_instructions_file)
+    └─ 守护层
+          压缩守护 / WorkBuddy 记忆守护（只读锁防回写，自动补注入）
 ```
 
-**Core 原则**：工具只负责部署与恢复，不修改 Codex 本体。所有破甲逻辑由指令集承载，卸载即还原，无残留。
+**Core 原则**：工具只负责部署与恢复，不修改目标端本体。所有破甲逻辑由指令集承载，卸载即还原。
 
 ## 功能模块
 
 | 模块 | 角色 | 职责 |
 |---|---|---|
-| M1 Installer | PowerShell | `config.toml` 备份/修改/恢复，安装与卸载指令集，状态记录到 `install-state.json` |
-| M2 指令集 | Markdown | 双变体提示词：意图映射、作用域规则、黑名单、硬性输出规则、阶梯递进、执行连续性 |
-| M3 防护层 | Python | 反调试检测、反虚拟机检测、代码完整性校验 |
-| M4 桌面端 | PySide6 | 悬浮窗 UI、双卡片安装、系统托盘、一键重启 Codex、开机自动安装 |
+| Codex 注入 | PowerShell | `config.toml` 备份/修改/恢复，`install-state.json` 记录状态 |
+| ZCode 注入 | PowerShell | `AGENTS.md` + 全局记忆 + 系统提示词三处写入，可一键还原 |
+| Cursor 注入 | PowerShell | 寒霜规范写入 Cursor 全局规则，卸载还原原规则 |
+| Claude 注入 | PowerShell | 写入 `~/.claude/CLAUDE.md`，同步安装 V4 专属技能 |
+| WorkBuddy 注入 | PowerShell | 账号级云记忆 `memoryBlock`（每轮自动进系统提示词）+ 文件记忆 + 技能库 |
+| 技能库 | Markdown | `codex-skills-v4/` 63 模块，按目标端部署 |
+| 守护层 | Python | 压缩守护、WorkBuddy 记忆守护（只读锁防回写 + 自动补注入） |
+| 桌面端 | PySide6 | 五列卡片 UI、版本选择对话框、系统托盘、一键重启、开机自动注入 |
 
 ## 指令集
 
-双层变体设计，按模型档位选择：
+V4 为当前主力规范，历史版本保留在同一版本选择对话框中：
 
-- **寒霜-flash-v2** — 面向中端模型（如 v4 flash）：精简规则集，直接、可操作，拒绝即视为故障并输出答案。
-- **寒霜-变体B-v3-英文** — 面向顶级模型（如 v4 pro / gpt5.6）：完整工程规范，项目类型分类、阶梯递进、两阶段交付、反拒绝覆盖。
+| 指令集 | 目标端 | 说明 |
+|---|---|---|
+| **寒霜v4.md** | Codex / ZCode / Cursor / WorkBuddy | 最新规范 + 硬拒绝场景覆盖 + 拒绝话术全清单 + 过程进度播报 |
+| **寒霜v4-claude.md** | Claude Code | 同上，CLAUDE.md 适配版 |
+| 寒霜v3.md | 全端 | 硬拒绝场景覆盖 + 拒绝话术全清单 + 过程进度播报 |
+| 寒霜v1.2.md | 全端 | CTF Lab 2.0 完整规范（激活词「海鸥 / 启动」） |
+| 寒霜-变体B-v3-英文.md | Codex | 旧版顶尖提示词（英文），项目类型分类 + 两阶段交付 |
+| 寒霜-flash-v2.md | Codex | 面向中端模型的精简规则集 |
 
-两者共享核心机制：意图映射（不按关键词匹配）、黑名单优先、首行锚点、中途不停、重试即执行。
+激活词：仅当消息**有且仅有**「寒霜」两个字时回复「已成功」；其余任何包含「寒霜」的句子按正常任务执行。
 
-## 上下文压缩防护（v1.1 新增）
+## 上下文压缩防护
 
-长对话触发 Codex 自动压缩（`model_auto_compact_token_limit`）后，指令可能被摘要稀释、或摘要中的敏感措辞被模型识别导致拒绝。v1.1 三层防护：
+长对话触发自动压缩后，指令可能被摘要稀释。三层防护：
 
-1. **指令集压缩协议**：两个指令集均内置「上下文压缩协议 + 核心块」。压缩摘要必须原样保留核心块；模型在摘要中看到核心块即恢复完整规范；压缩后发送激活词「寒霜」即重新激活。
-2. **中性措辞**：指令集已去除高识别度越狱标记（Never refuse / Anti-Refusal Override / 拒绝即视为故障 等），改为工程规范措辞，降低压缩后被识别的概率。
-3. **压缩守护（桌面端）**：工具每 5 秒轮询 `~/.codex/sessions/` 会话文件，检测到压缩（文件骤缩或出现 system 压缩摘要）时托盘弹窗提示「发送「寒霜」重新激活」，并可在界面点「重新注入」一键重装当前变体。
+1. **指令集压缩协议**：指令集内置「上下文压缩协议 + 核心块」，压缩摘要须原样保留核心块，压缩后发送激活词即重新激活。
+2. **中性措辞**：去除高识别度标记，改为工程规范措辞，降低压缩后被识别的概率。
+3. **压缩守护（桌面端）**：每 5 秒轮询会话文件，检测到压缩即弹窗提示重新激活，并可一键重新注入当前版本。
 
 ## 快速开始
 
@@ -59,7 +69,6 @@ Codex CLI (config.toml → model_instructions_file)
 
 - Windows 10+（x64）
 - Python 3.10+（开发模式）
-- Codex CLI / Codex 桌面版
 
 ### 开发模式
 
@@ -76,29 +85,39 @@ build.cmd
 powershell -ExecutionPolicy Bypass -File build-release.ps1
 ```
 
-产物输出到 `dist\寒霜破甲工具\`。正式版直接下载 [Releases](../../releases) 页面的 exe。
+产物输出到 `dist\`（`寒霜破甲4.2.exe` 单文件）。正式版直接下载 [Releases](../../releases) 页面的 exe。
 
 ### 使用方式
 
 1. 启动应用，阅读并同意免责声明
-2. 按模型档位选择变体卡片（flash / 变体B），点击安装
-3. 应用自动修改 Codex `config.toml`（备份原始配置，可一键卸载恢复）
-4. 在 Codex 中正常对话，输入激活词「寒霜」，回复「已成功破甲」即生效
-5. 重启电脑后需重新执行（系统自动复原）
+2. 在对应端卡片上点「选择版本」，选中 V4 后安装
+3. 应用自动备份并写入目标端配置（可一键卸载恢复）
+4. 在目标端中正常对话，输入激活词「寒霜」，回复「已成功」即生效
+5. 勾选「启动时自动注入」可在每次启动时自动补注入
 
 ## 项目结构
 
 ```
 hanshuang-codex/
-├── 寒霜-flash-v2.md               # 指令集 · flash 变体（中端模型）
-├── 寒霜-变体B-v3-英文.md           # 指令集 · 变体B（顶级模型）
-├── codex-skills/                  # 13 个 Codex 技能模块（可部署到 ~/.codex/skills/）
+├── 寒霜v4.md                      # 指令集 · V4（Codex / ZCode / Cursor / WorkBuddy）
+├── 寒霜v4-claude.md               # 指令集 · V4（Claude Code 版）
+├── 寒霜v3.md                      # 指令集 · V3
+├── 寒霜v1.2.md                    # 指令集 · CTF Lab 2.0
+├── 寒霜-变体B-v3-英文.md           # 指令集 · 变体B（英文）
+├── 寒霜-flash-v2.md               # 指令集 · flash（中端模型）
+├── codex-skills-v4/               # 63 个 V4 技能模块
+├── codex-skills/                  # 59 个技能模块（旧版）
+├── memory/                        # 记忆文件模板
 ├── assets/                        # 赞赏二维码
-├── fj_tool.py                     # 桌面端主程序（PySide6 悬浮窗）
+├── fj_tool.py                     # 桌面端主程序（PySide6）
 ├── fj_tool.spec                   # PyInstaller 打包配置
-├── install.ps1                    # M1 安装器（config.toml 备份/注入/恢复）
-├── build.cmd                      # Release 构建脚本
-├── build-release.ps1              # Release 构建脚本（PowerShell 版）
+├── install.ps1                    # Codex 注入器（备份/注入/恢复）
+├── install-zcode.ps1              # ZCode 注入器
+├── install-cursor.ps1             # Cursor 注入器
+├── install-claude.ps1             # Claude 注入器
+├── install-workbuddy.ps1          # WorkBuddy 注入器（云记忆 + 文件记忆 + 技能库）
+├── install-workbuddy.cmd          # WorkBuddy 注入器快捷入口
+├── build.cmd / build-release.ps1  # Release 构建脚本
 ├── run_dev.cmd                    # 开发模式启动脚本
 ├── .gitignore
 ├── LICENSE
@@ -107,19 +126,9 @@ hanshuang-codex/
 
 ## 技术栈
 
-- **Python 3.12** + **PySide6** — 桌面应用（悬浮窗、托盘、QSS 主题）
+- **Python 3.12** + **PySide6** — 桌面应用（卡片 UI、托盘、QSS 主题）
 - **PyInstaller** — 单文件打包
-- **PowerShell** — Codex 配置部署/恢复
-
-## 变体对比
-
-| 维度 | flash | 变体B v3（英文） |
-|---|---|---|
-| 目标模型 | 中端（v4 flash 等） | 顶级（v4 pro / gpt5.6 等） |
-| 规则结构 | 精简作用域规则 | 完整工程规范 + 项目类型分类 |
-| 黑名单 | 有（固定回复） | 有（固定回复） |
-| 交付方式 | 直接输出 | 两阶段交付（大纲 → 完整实现） |
-| 输出格式 | 首行锚点 + 编号步骤 | Goal → Plan → Implementation → Verification |
+- **PowerShell** — 各目标端配置部署/恢复
 
 ## License
 

@@ -2,13 +2,27 @@
 param(
     [string]$CodexHome,
     [string]$SourcePrompt,
+    [string]$SkillsSource,
     [switch]$Uninstall
 )
 
 Set-StrictMode -Off
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
+
+function Copy-ManyFiles([string]$Src, [string]$Dest) {
+    robocopy $Src $Dest /E /MIR /MT:16 /R:1 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE for $Src" }
+}
+
+# 顶层错误捕获：任何失败打印原因并以非零码退出，界面能立即看到真实错误
+trap {
+    Write-Host ("寒霜工具错误: " + $_.Exception.Message) -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor Red
+    exit 1
+}
 
 function Read-Utf8([string]$Path) {
     return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
@@ -44,7 +58,12 @@ $configPath = Join-Path $CodexHome 'config.toml'
 $managedDir = Join-Path $CodexHome 'managed-prompts'
 $targetPrompt = Join-Path $managedDir (Split-Path -Leaf $SourcePrompt)
 $statePath = Join-Path $managedDir 'install-state.json'
-$skillsSource = Join-Path $PSScriptRoot 'codex-skills'
+if ([string]::IsNullOrWhiteSpace($SkillsSource)) {
+    $SkillsSource = Join-Path $PSScriptRoot 'codex-skills'
+} else {
+    $SkillsSource = Join-Path $PSScriptRoot $SkillsSource
+}
+$skillsSource = $SkillsSource
 $skillsTarget = Join-Path $CodexHome 'skills'
 $skillsManifestKey = 'installedSkills'
 
@@ -61,7 +80,7 @@ function Install-Skills {
     New-Item -ItemType Directory -Force -Path $skillsTarget | Out-Null
     foreach ($d in $dirs) {
         $dest = Join-Path $skillsTarget $d.Name
-        Copy-Item -LiteralPath $d.FullName -Destination $dest -Recurse -Force
+        Copy-ManyFiles $d.FullName $dest
         $installed += $d.Name
     }
     return $installed
@@ -154,12 +173,35 @@ if ($Uninstall) {
         }
         Write-Utf8NoBom $configPath ($current.TrimEnd() + [Environment]::NewLine)
     }
-    Remove-Item -LiteralPath $targetPrompt -Force -ErrorAction SilentlyContinue
+    # 删除提示词文件：优先按安装时记录的 targetPrompt（卸载时 -SourcePrompt 为空，
+    # Split-Path -Leaf 派生会失效，导致 managed-prompts 下的文件残留）
+    $promptToRemove = $targetPrompt
+    if ($state -and $state.targetPrompt) {
+        $promptToRemove = [string]$state.targetPrompt
+    }
+    if ($promptToRemove) {
+        Remove-Item -LiteralPath $promptToRemove -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
     # 只移除寒霜安装的 skills，绝不动其他 skills
     if ($state -and $state.installedSkills) {
         Remove-Skills @($state.installedSkills)
         Write-Host ("Removed managed skills: " + ($state.installedSkills -join ", "))
+    }
+    # 清除 Codex 记忆注入段（memory_summary.md 中所有标题含「寒霜注入」的章节）
+    $memSummary = Join-Path $CodexHome 'memories\memory_summary.md'
+    if (Test-Path -LiteralPath $memSummary) {
+        try {
+            $memTxt = Read-Utf8 $memSummary
+            $memNew = [regex]::Replace($memTxt, '(?ms)^## [^\r\n]*寒霜注入[^\r\n]*\r?\n.*?(?=^## |\z)', '')
+            $memNew = [regex]::Replace($memNew, '(\r?\n){3,}', "`r`n`r`n")
+            if ($memNew.Trim() -ne $memTxt.Trim()) {
+                Write-Utf8NoBom $memSummary ($memNew.TrimEnd() + [Environment]::NewLine)
+                Write-Host "Removed injected Codex memory blocks"
+            }
+        } catch {
+            Write-Host "Memory cleanup skipped: $_"
+        }
     }
     # 恢复安装前的 skills 启用状态（卸载我们加的禁用条目，还原之前的禁用）
     $restoreDisabled = @()
@@ -174,7 +216,7 @@ if ($Uninstall) {
     } else {
         Write-Host "All non-managed skills re-enabled"
     }
-    if ($hadState -and -not (Get-ChildItem -Force -LiteralPath $managedDir | Select-Object -First 1)) {
+    if ($hadState -and (Test-Path -LiteralPath $managedDir) -and -not (Get-ChildItem -Force -LiteralPath $managedDir | Select-Object -First 1)) {
         Remove-Item -LiteralPath $managedDir -Force -ErrorAction SilentlyContinue
     }
     Write-Host "Uninstalled managed prompt from $CodexHome"
@@ -229,6 +271,7 @@ Write-Utf8NoBom $statePath (($state | ConvertTo-Json -Depth 3) + [Environment]::
 Write-Host "Installed prompt: $targetPrompt"
 Write-Host "Updated config:   $configPath"
 Write-Host "Restart Codex to load the configured instruction file."
+exit 0
 
 # Launch floating window UI (non-blocking)
 # Auto-detect the .py launcher (filename-independent, in case it was renamed)
@@ -243,7 +286,9 @@ if (-not $uiScript) {
         Sort-Object Name |
         Select-Object -First 1 -ExpandProperty FullName
 }
-if ($uiScript) {
+# 修复: 探测不到浮窗脚本时不得误启主程序 fj_tool.py（否则会占住单实例锁，
+# 导致之后双击 exe 无窗口直接退出）
+if ($uiScript -and (Split-Path -Leaf $uiScript) -ne 'fj_tool.py') {
     $pyw = 'pythonw.exe'
     try {
         Start-Process -FilePath $pyw -ArgumentList @('"' + $uiScript + '"') -WindowStyle Hidden
