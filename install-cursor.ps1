@@ -9,6 +9,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
+# 子进程 stdout 会被上层（electron/main.cjs）按 UTF-8 解码，
+# 必须先锁定控制台输出编码为 UTF-8，否则中文会以 GBK 写出而变成乱码（U+FFFD）。
+try { [Console]::OutputEncoding = $Utf8 } catch {}
+try { $OutputEncoding = $Utf8 } catch {}
 
 function Read-Utf8([string]$Path) {
     return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)

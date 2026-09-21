@@ -67,6 +67,10 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
 $Root = if ($ScriptRoot) { $ScriptRoot } else { $PSScriptRoot }
 if (-not $Root) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+# 子进程 stdout 会被上层（electron/main.cjs）按 UTF-8 解码，
+# 必须先锁定控制台输出编码为 UTF-8，否则中文会以 GBK 写出而变成乱码（U+FFFD）。
+try { [Console]::OutputEncoding = $Utf8NoBom } catch {}
+try { $OutputEncoding = $Utf8NoBom } catch {}
 $MEM_VERSION = 999999      # 高版本号：程序写档案时 incoming < existing 会被判 stale_version 拒绝
 $SKILL_MANIFEST = '.hanshuang-skills.json'
 
