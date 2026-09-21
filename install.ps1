@@ -18,6 +18,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
+# 子进程 stdout 会被上层（electron/main.cjs）按 UTF-8 解码，
+# 必须先锁定控制台输出编码为 UTF-8，否则中文会以 GBK 写出而变成乱码（U+FFFD）。
+try { [Console]::OutputEncoding = $Utf8 } catch {}
+try { $OutputEncoding = $Utf8 } catch {}
 
 # 目标已是最新时跳过整棵树的复制。重装时绝大多数文件没变，跳过能省掉全部磁盘写入 ——
 # 实测这是被杀软实时扫描拖慢的主因，跳过比复制快一个数量级。
