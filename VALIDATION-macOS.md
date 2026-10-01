@@ -17,8 +17,8 @@
 | 注入目标路径是否正确 | ✅ 7 个目标全部指向 macOS 真实目录 |
 | 能否选择性不破甲某些 agent | ✅ 可以（UI 逐目标安装）**但有一个例外，见 §4** |
 | 约束文件会不会被覆盖 | ⚠️ 主流程是追加式，**但有 3 处是整份覆盖**，见 §5 |
-| 发现的真 bug | ❌ **1 个（豆包内核选择依赖 locale）** |
-| 能否直接提 PR | ❌ 不能 —— 目录不是 git 仓库（P0），且有 189 个权限位噪音 |
+| 发现的真 bug | ✅ 1 个（豆包内核选择依赖 locale）—— **已修复并验证**，见 §6 P1-1 |
+| 能否直接提 PR | ✅ 可以 —— 分支 `macos-port` 已建好（21 文件 / +7790 −129，零噪音） |
 
 ---
 
@@ -177,17 +177,19 @@ hs_backup_once() { ... cp -f "$f" "$bak" ... }
 
 ## 六、Bug 与问题清单
 
-### P0 —— 阻断提交
+### P0 —— 阻断提交（✅ 已解决）
 
-**这个目录不是 git 仓库**（无 `.git` / remote / 历史）。
+**原问题**：源目录 `/Volumes/S690/codes/hanshuang-mac` 不是 git 仓库（无 `.git` / remote / 历史）。
 直接 `git init` 会产出与上游**无共同祖先**的孤儿仓库，PR 无法 diff。
-必须先 clone 上游，再把改动叠加到新分支。命令见 §7。
+
+**解决**：已 clone 上游 → 建分支 `macos-port` → 只叠加真实改动。
+命令见 §7。本 PR 就是从那个分支推上来的。
 
 ---
 
-### P1-1 🔴 豆包内核选择依赖 locale，会选错二进制（真 bug）
+### P1-1 ✅ 豆包内核选择依赖 locale，会选错二进制（真 bug —— **已修复**）
 
-`install-doubao.sh:139` 用通配符取 Helpers 里**第一个**可执行文件：
+**原实现**（`install-doubao.sh`）用通配符取 Helpers 里**第一个**可执行文件：
 
 ```bash
 for c in "$app/Contents/Helpers/"*.app/Contents/MacOS/*; do
@@ -195,11 +197,11 @@ for c in "$app/Contents/Helpers/"*.app/Contents/MacOS/*; do
 done
 ```
 
-但你机器上 `DoubaoWork.app/Contents/Helpers/` 里有**两个** `.app`：
+但 `DoubaoWork.app/Contents/Helpers/` 里有**两个** `.app`：
 
 ```
-DoubaoWork Browser.app   BundleID com.work.pc.doubao.browser   ← 真正的 Chromium 内核（要的）
-豆包.app                  BundleID com.work.pc.doubao.linkrouter ← 路由辅助（不要的）
+DoubaoWork Browser.app   BundleID com.work.pc.doubao.browser    ← 真正的 Chromium 内核（要的）
+豆包.app                  BundleID com.work.pc.doubao.linkrouter  ← 路由辅助（不要的）
 ```
 
 **实测三种 locale 的结果**：
@@ -214,16 +216,35 @@ LC_ALL=en_US.UTF-8  → 选中 豆包.app（linkrouter）  ❌ 错误
 脚本白等 20 秒后走 `open -a --args` 兜底（而脚本自己的注释都写了这条路不可靠）。
 表现为"豆包破甲失败"，且原因极难排查。
 
-**修法**（任选）：
-- 在循环前 `export LC_ALL=C` 让 glob 顺序确定；
-- 或改为优先匹配 `*Browser*.app` / BundleID 含 `browser` 的那个；
-- 或选 `Contents/MacOS/` 下二进制体积最大的那个（内核约 100MB+，linkrouter 小得多）。
+**修复**（本次已实施）：新增 `doubao_pick_browser_bin()`，改为**按 BundleID / 可执行名打分**
+判定，不再依赖 glob 展开顺序：
+
+| 优先级 | 判据 |
+|---|---|
+| 3（最高） | BundleID 含 `browser` / `framework` |
+| 2 | 可执行名含 `Browser` |
+| 1 | 其余（排除 linkrouter / helper / updater / relaunch / crashpad 等已知辅助进程） |
+
+枚举顺序固定为 `LC_ALL=C find ... -print0`，并用 `read -d ''` 逐条读
+（Helpers 里的包名带空格，`$(ls)` 会被词拆分）。
+
+**注意不能用"体积最大"当判据**：实测 Chromium 主体只有 **0.1 MB**（真正的代码在
+Framework 里），linkrouter 反而有 **3.8 MB** —— 按体积会正好选错。
+
+同时把回退分支（非 Helpers 布局的老版本）从"取 Contents/MacOS 里第一个"改为
+优先读 `CFBundleExecutable`，读不到才退回取第一个。
+
+**验证**：6 个用例 × 3 种 locale = 18 项断言全部通过，覆盖真机 `DoubaoWork.app`、
+无 Helpers 布局、Helpers 里只有 linkrouter、Browser 与 linkrouter 并存且字母序颠倒、
+路径不存在等场景。
 
 ---
 
-### P1-2 189 个上游文件被改了权限位（644 → 755）
+### P1-2 ✅ 189 个上游文件被改了权限位（644 → 755）—— **已修复**
 
-见 §2。提交前需还原，否则 PR 里混入 189 行无关 diff。
+见 §2。**解决方式**：建分支时不整目录 rsync 覆盖，而是先把工作区整体还原成上游
+（`git checkout -- .`），再只 `cp` 真正改动的 4 个文件 + 新增的 17 个文件。
+本 PR 的 diff 里因此**没有任何权限位噪音**。
 
 ---
 
@@ -244,19 +265,24 @@ LC_ALL=en_US.UTF-8  → 选中 豆包.app（linkrouter）  ❌ 错误
 
 ---
 
-### P1-4 `.gitignore` 是 CRLF 且内容仍是 Windows 遗留
+### P1-4 ✅ `.gitignore` 是 CRLF —— **已修复**
 
-40 行全部 CRLF；内容里 `Thumbs.db` / `desktop.ini` / `build_log*.txt` /
-`dist_nuitka/` / `*.spec.bak` 都是 Windows 时代的，macOS 侧缺项。
+上游 `.gitignore` 存的是 LF，移植目录里那份是 CRLF。**解决方式**：同 P1-2，
+建分支时让 `.gitignore` 保持上游版本，CRLF 问题随之消失。
+
+> 备注：上游 `.gitignore` 的内容本身仍是 Windows 遗留（`Thumbs.db` / `desktop.ini` /
+> `build_log*.txt` / `dist_nuitka/` / `*.spec.bak`），macOS 侧缺项。
+> 这属于上游既有状态，本 PR 未改动，可另开 PR 处理。
 
 ---
 
-### P1-5 `.gitattributes` 覆盖不全
+### P1-5 ✅ `.gitattributes` 覆盖不全 —— **已修复**
 
-只钉了 `*.sh` / `*.cjs` / `*.mjs`，但实际存在 CRLF 的还有：
-`scripts/after-pack.js`、`electron/preload.cjs`、
-以及载荷里 15+ 个 `*.js`（`mcp-bridge.js`、`eni-reverselab-platform/.claude/workflows/*.js` 等）。
-建议补 `*.js text eol=lf`，再 `git add --renormalize .`。
+原只钉了 `*.sh` / `*.cjs` / `*.mjs`。**解决方式**：本 PR 已补上 `*.js text eol=lf`，
+覆盖 `scripts/after-pack.js`、`electron/preload.cjs` 以及载荷里的 15+ 个 `*.js`。
+
+另：`package.json` 不在任何 `*.text` 规则覆盖范围内，移植目录里那份是 CRLF，
+会让 diffstat 虚报（357 行 vs 真实的 23 行）。建分支时已一并转成 LF。
 
 ---
 
@@ -341,7 +367,7 @@ git push -u origin macos-port
 - 应用启动，7 个页面全部渲染
 
 **未实测（必须写明）**
-- 豆包 CDP 链路（Chromium 147 前提已确认，但**内核选择有 locale 依赖 bug，见 P1-1**）
+- 豆包 CDP 链路（Chromium 147 前提已确认；内核选择的 locale 依赖 bug 已修，见 P1-1）
 - 豆包云端 `set_agentsmd` 接口在"工作版"中是否存在
 - Cursor 项目级规则（`workspaceStorage` 里只有 `empty-window`）
 - dmg 安装后的 Gatekeeper 实际行为

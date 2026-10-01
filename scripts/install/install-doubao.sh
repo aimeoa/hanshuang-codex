@@ -130,19 +130,91 @@ kill_doubao() {
 #   <App>.app/Contents/Helpers/<X> Browser.app/...        ← 真正的 Chromium 内核
 # 启动器未必把 --remote-debugging-port 透传给内核，所以**优先直接跑 Helpers 里的内核**，
 # 这才是「绕开启动器」在 macOS 上的等价做法。
-start_doubao_debug() {
-  local app="$1" bin="" c i=0
 
-  # 1. 优先：包内 Helpers 下的 Chromium 主体
-  for c in "$app/Contents/Helpers/"*.app/Contents/MacOS/*; do
-    if [ -f "$c" ] && [ -x "$c" ]; then bin="$c"; break; fi
+# 取一个 .app 包内的主可执行文件（没有则返回 1）
+doubao_app_bin() {
+  local c
+  for c in "$1/Contents/MacOS/"*; do
+    if [ -f "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
   done
+  return 1
+}
 
-  # 2. 退回：外层可执行文件（非 Helpers 布局的版本，或老版本）
+# 读一个 .app 的 BundleID（读不到输出空，不报错）
+doubao_bundle_id() {
+  local plist="$1/Contents/Info.plist"
+  [ -f "$plist" ] || return 0
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || true
+}
+
+# 按 Info.plist 的 CFBundleExecutable 定位 .app 的主可执行 —— 这是 macOS 上
+# 「主可执行是谁」的定义，比「取 Contents/MacOS 里第一个」可靠
+doubao_bundle_exec() {
+  local app="$1" exe
+  [ -f "$app/Contents/Info.plist" ] || return 1
+  exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  [ -n "$exe" ] || return 1
+  [ -x "$app/Contents/MacOS/$exe" ] || return 1
+  printf '%s' "$app/Contents/MacOS/$exe"
+}
+
+# 已知的非内核子进程（linkrouter / helper / updater / ...），命中即排除
+doubao_is_aux() {
+  case "$1" in
+    *[Ll]inkrouter*|*[Hh]elper*|*[Uu]pdater*|*[Rr]elaunch*|*crashpad*|*[Mm]antle*|*[Ss]quirrel*)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# 在 <App>.app/Contents/Helpers 下挑出真正的 Chromium 主体。
+#
+# 为什么不能「取第一个」：Helpers 下通常不止一个 .app —— 实测 DoubaoWork.app 里
+# 同时有「DoubaoWork Browser.app」(com.work.pc.doubao.browser，要的) 和
+# 「豆包.app」(com.work.pc.doubao.linkrouter，不要的)。而 glob 的展开顺序受 LC_ALL
+# 影响：LC_ALL=en_US.UTF-8 下「豆包.app」排在前面，就会误选成 linkrouter，
+# 调试端口永远开不出来 —— 表现是「豆包破甲失败」，且原因极难排查。
+# 所以这里按 BundleID / 可执行名打分判定，枚举顺序固定为 LC_ALL=C。
+#
+# 也不能用「体积最大」当判据：实测 Chromium 主体只有 0.1MB（真正的代码在
+# Framework 里），linkrouter 反而有 3.8MB —— 按体积会正好选错。
+doubao_pick_browser_bin() {
+  local helpers="$1/Contents/Helpers"
+  [ -d "$helpers" ] || return 1
+  local a c name bid score best="" best_score=0
+  # -print0 + read -d ''：Helpers 里的包名带空格（「DoubaoWork Browser.app」），
+  # 用 $(ls) 会被词拆分，必须按 NUL 分隔逐条读
+  while IFS= read -r -d '' a; do
+    c="$(doubao_app_bin "$a")" || continue
+    name="$(basename "$c")"
+    bid="$(doubao_bundle_id "$a")"
+    doubao_is_aux "$name$bid" && continue
+    score=1
+    case "$name" in *[Bb]rowser*) score=2 ;; esac
+    case "$bid"  in *[Bb]rowser*|*[Ff]ramework*) score=3 ;; esac
+    if [ "$score" -gt "$best_score" ]; then best_score="$score"; best="$c"; fi
+  done < <(LC_ALL=C find "$helpers" -maxdepth 1 -type d -name '*.app' -print0 2>/dev/null)
+  [ -n "$best" ] && { printf '%s' "$best"; return 0; }
+  return 1
+}
+
+start_doubao_debug() {
+  local app="$1" bin="" c i=0 exe=""
+
+  # 1. 优先：包内 Helpers 下的 Chromium 主体（按 BundleID/名字判定，与 locale 无关）
+  bin="$(doubao_pick_browser_bin "$app")"
+
+  # 2. 退回：外层可执行文件（非 Helpers 布局的版本，或老版本）。
+  #    优先按 CFBundleExecutable 定位，读不到才退回「取 Contents/MacOS 里第一个」。
   if [ -z "$bin" ]; then
-    for c in "$app/Contents/MacOS/"*; do
-      if [ -f "$c" ] && [ -x "$c" ]; then bin="$c"; break; fi
-    done
+    exe="$(doubao_bundle_exec "$app")"
+    if [ -n "$exe" ]; then
+      bin="$exe"
+    else
+      for c in "$app/Contents/MacOS/"*; do
+        if [ -f "$c" ] && [ -x "$c" ]; then bin="$c"; break; fi
+      done
+    fi
   fi
 
   if [ -n "$bin" ]; then
