@@ -25,6 +25,17 @@ try {
 const INSTALL_TIMEOUT = 300000;
 const UNINSTALL_TIMEOUT = 120000;
 
+/**
+   平台分支。执行层是这套工具唯一真正绑定平台的部分：
+     · Windows：powershell.exe 跑 install*.ps1
+     · macOS / Linux：/bin/bash 跑 install*.sh
+   界面层（src/）与下面除「执行」以外的逻辑都是跨平台的。
+*/
+const IS_WIN = process.platform === "win32";
+const IS_MAC = process.platform === "darwin";
+/** 非 Windows 上安装脚本所在子目录（相对工具根目录）。 */
+const UNIX_SCRIPTS_SUBDIR = ["scripts", "install"];
+
 let win = null;
 let tray = null;
 let quitting = false;
@@ -36,21 +47,36 @@ let childLabel = "";
 
 /**
    脚本目录：打包后在 resources/；开发时 main.cjs 位于 <工具目录>/electron/，
-   所以先试上一级，再在上一级的同级目录里找带 install.ps1 的那一层
+   所以先试上一级，再在上一级的同级目录里找带安装脚本的那一层
    （项目目录名可能带中文或空格，不能写死）。
+
+   两个平台的安装脚本位置不同：
+     · Windows：install*.ps1 直接放在工具根目录
+     · macOS/Linux：install*.sh 统一放在 scripts/install/（与 lib.sh 同目录，
+       这样脚本里的 $BASH_SOURCE 相对寻址在开发和打包后都成立）
 */
-const INSTALL_SCRIPTS = [
-  "install.ps1",
-  "install-zcode.ps1",
-  "install-cursor.ps1",
-  "install-claude.ps1",
-  "install-workbuddy.ps1",
-  "install-dsh.ps1",
-];
+const INSTALL_SCRIPTS = IS_WIN
+  ? [
+      "install.ps1",
+      "install-zcode.ps1",
+      "install-cursor.ps1",
+      "install-claude.ps1",
+      "install-workbuddy.ps1",
+      "install-dsh.ps1",
+    ]
+  : [
+      "install.sh",
+      "install-zcode.sh",
+      "install-cursor.sh",
+      "install-claude.sh",
+      "install-workbuddy.sh",
+      "install-dsh.sh",
+    ];
 
 function hasScripts(dir) {
+  const base = IS_WIN ? dir : path.join(dir, ...UNIX_SCRIPTS_SUBDIR);
   try {
-    return INSTALL_SCRIPTS.every((f) => fs.existsSync(path.join(dir, f)));
+    return INSTALL_SCRIPTS.every((f) => fs.existsSync(path.join(base, f)));
   } catch {
     return false;
   }
@@ -70,6 +96,18 @@ function toolDir() {
     /* 落到兜底 */
   }
   return path.resolve(parent);
+}
+
+/** 安装脚本所在目录：Windows 是工具根目录，其余平台是 scripts/install/。 */
+function installDir() {
+  return IS_WIN ? toolDir() : path.join(toolDir(), ...UNIX_SCRIPTS_SUBDIR);
+}
+
+/** 安装脚本的绝对路径。 */
+function scriptPath(targetId) {
+  const name = SCRIPTS[targetId];
+  if (!name) throw new Error("未知目标: " + targetId);
+  return IS_WIN ? p(name) : path.join(installDir(), name);
 }
 
 function homeDir() {
@@ -93,9 +131,13 @@ function codexHome() {
     try { if (fs.existsSync(envHome)) { cachedCodexHome = envHome; return cachedCodexHome; } } catch { /* 忽略 */ }
   }
   try { if (fs.existsSync(def)) { cachedCodexHome = def; return cachedCodexHome; } } catch { /* 忽略 */ }
-  for (let c = 67; c <= 90; c++) {   // C: 到 Z:
-    const p = String.fromCharCode(c) + ":\\" + ".codex";
-    try { if (fs.existsSync(p)) { cachedCodexHome = p; return cachedCodexHome; } } catch { /* 盘不存在 */ }
+  if (IS_WIN) {
+    // 逐盘符找 .codex 只在 Windows 有意义（用户可能把数据目录迁到别的盘）。
+    // macOS 上 Codex 固定读 ~/.codex，没有盘符概念，直接跳过。
+    for (let c = 67; c <= 90; c++) {   // C: 到 Z:
+      const p = String.fromCharCode(c) + ":\\" + ".codex";
+      try { if (fs.existsSync(p)) { cachedCodexHome = p; return cachedCodexHome; } } catch { /* 盘不存在 */ }
+    }
   }
   cachedCodexHome = def;
   return cachedCodexHome;
@@ -120,16 +162,19 @@ function writeJson(file, data) {
 
 // ---------- 任务定义（与 Python 版一致） ----------
 
+/** 安装脚本后缀：Windows 是 PowerShell，其余平台是 POSIX shell。 */
+const SCRIPT_EXT = IS_WIN ? ".ps1" : ".sh";
+
 const SCRIPTS = {
-  codex: "install.ps1",
-  zcode: "install-zcode.ps1",
-  cursor: "install-cursor.ps1",
-  claude: "install-claude.ps1",
-  workbuddy: "install-workbuddy.ps1",
+  codex: "install" + SCRIPT_EXT,
+  zcode: "install-zcode" + SCRIPT_EXT,
+  cursor: "install-cursor" + SCRIPT_EXT,
+  claude: "install-claude" + SCRIPT_EXT,
+  workbuddy: "install-workbuddy" + SCRIPT_EXT,
   // WorkBuddy 国内版：同一个脚本，靠 -ConfigDir 指到 ~/.workbuddy 区分
-  "workbuddy-cn": "install-workbuddy.ps1",
-  dsh: "install-dsh.ps1",
-  doubao: "install-doubao.ps1",
+  "workbuddy-cn": "install-workbuddy" + SCRIPT_EXT,
+  dsh: "install-dsh" + SCRIPT_EXT,
+  doubao: "install-doubao" + SCRIPT_EXT,
 };
 
 const TARGET_IDS = Object.keys(SCRIPTS);
@@ -201,15 +246,18 @@ function knownPromptPaths() {
   return list;
 }
 
+/**
+   组装安装脚本的参数。
+   只负责算出「脚本之后的参数」，平台差异（Windows 要在最前面加 -File）统一在最后处理。
+*/
 function installArgs(targetId, promptFile) {
-  const script = SCRIPTS[targetId];
-  if (!script) throw new Error("未知目标: " + targetId);
-  const file = p(script);
+  const file = scriptPath(targetId);
   const prompt = p(promptFile);
+  let tail;
 
   switch (targetId) {
     case "codex": {
-      // 所有 Codex 版本都额外写一份到 <CodexHome>\AGENTS.md（Codex 原生全局指令文件；
+      // 所有 Codex 版本都额外写一份到 <CodexHome>/AGENTS.md（Codex 原生全局指令文件；
       // config.toml 会被 Codex 自己重写，AGENTS.md 不会丢）
       const inject = ["-InjectAgents", "-AgentsKnown", knownPromptPaths().join(";")];
       // V5 双提示词：按用户选的那一份注入，且不装任何 skills
@@ -217,81 +265,85 @@ function installArgs(targetId, promptFile) {
       if (astra) {
         const src = astraPromptPath(astra);
         if (!src) throw new Error("找不到 V5 提示词文件：" + astra.candidates[0].join("/"));
-        return ["-File", file, "-SourcePrompt", src, "-NoSkills", ...inject];
+        tail = ["-SourcePrompt", src, "-NoSkills", ...inject];
+        break;
       }
-      const args = ["-File", file, "-SourcePrompt", prompt];
-      if (promptFile === "寒霜v5.md") {
-        // 技能库改用 v4：v5 那套（codex-skills-v5 / codex-bundle-v5）整个来自外部包
-        // 「codex＋Astra6破 v2」，已从仓库移除，不再作为分发内容
-        args.push("-SkillsSource", "codex-skills-v4");
-      } else {
-        args.push("-SkillsSource", "codex-skills-v4");
-      }
-      return [...args, ...inject];
+      // 技能库统一用 v4：v5 那套（codex-skills-v5 / codex-bundle-v5）整个来自外部包
+      // 「codex＋Astra6破 v2」，已从仓库移除，不再作为分发内容
+      tail = ["-SourcePrompt", prompt, "-SkillsSource", "codex-skills-v4", ...inject];
+      break;
     }
     case "zcode": {
-      const args = [
-        "-File", file,
+      tail = [
         "-PatchSystemPrompt",
         "-SourcePrompt", prompt,
         "-MemorySourcePrompt", prompt,
       ];
-      if (promptFile === "寒霜v4.md") args.push("-SkillsSource", "codex-skills-v4");
-      return args;
+      if (promptFile === "寒霜v4.md") tail.push("-SkillsSource", "codex-skills-v4");
+      break;
     }
     case "claude":
       // -KnownPrompts：CLAUDE.md 正文若本来就是某份随包提示词（手工贴过/老版本注入的），
       // 允许整份改写成带标记的块，而不是当成用户内容追加
-      return [
-        "-File", file,
+      tail = [
         "-SourcePrompt", prompt,
         "-SkillsSource", "codex-skills-v4",
         "-KnownPrompts", knownPromptPaths().join(";"),
       ];
+      break;
     case "workbuddy":
-      return ["-File", file, "-SourcePrompt", prompt, "-SkillsSource", "codex-skills-v4"];
+      tail = ["-SourcePrompt", prompt, "-SkillsSource", "codex-skills-v4"];
+      break;
     case "workbuddy-cn":
       // 国内版数据目录固定是 ~/.workbuddy，必须显式指定 ——
       // 脚本的自动探测优先国际版（.workbuddy-ai），不指定的话国内版永远装不上。
-      return [
-        "-File", file,
+      tail = [
         "-SourcePrompt", prompt,
         "-SkillsSource", "codex-skills-v4",
         "-ConfigDir", path.join(homeDir(), ".workbuddy"),
       ];
+      break;
     // DeepSeek Harness：注入 ~/.dsh/AGENTS.md + 同步 ~/.dsh/skills
     case "dsh":
-      return ["-File", file, "-SourcePrompt", prompt, "-SkillsSource", "codex-skills-v4"];
+      tail = ["-SourcePrompt", prompt, "-SkillsSource", "codex-skills-v4"];
+      break;
     // 豆包：提示词写进云端全局记忆（AGENTS.md 式整份覆盖），不走本地文件、不需要技能库
     case "doubao":
-      return ["-File", file, "-SourcePrompt", prompt];
+      tail = ["-SourcePrompt", prompt];
+      break;
     case "cursor":
-      return ["-File", file, "-SourcePrompt", prompt];
+      tail = ["-SourcePrompt", prompt];
+      break;
     default:
-      return ["-File", file, "-SourcePrompt", prompt];
+      tail = ["-SourcePrompt", prompt];
   }
+
+  return IS_WIN ? ["-File", file, ...tail] : [file, ...tail];
 }
 
 function uninstallArgs(targetId) {
-  const args = ["-File", p(SCRIPTS[targetId]), "-Uninstall"];
+  const file = scriptPath(targetId);
+  const tail = ["-Uninstall"];
   // 国内版必须显式指定数据目录，否则卸载会走自动探测跑到国际版上去
-  if (targetId === "workbuddy-cn") args.push("-ConfigDir", path.join(homeDir(), ".workbuddy"));
-  return args;
+  if (targetId === "workbuddy-cn") tail.push("-ConfigDir", path.join(homeDir(), ".workbuddy"));
+  return IS_WIN ? ["-File", file, ...tail] : [file, ...tail];
 }
 
 /**
-   提示词残留兜底清扫（scripts/clear-injected-prompts.ps1，由 extraResources 打进
-   resources/scripts/）。按 -Targets 限定到当前目标，避免卸载一个目标时把别的目标的
-   提示词也一起清掉。
+   提示词残留兜底清扫（由 extraResources 打进 resources/scripts/）。
+   按 -Targets 限定到当前目标，避免卸载一个目标时把别的目标的提示词也一起清掉。
 */
 function clearPromptsArgs(targetId) {
   // 清理脚本的 workbuddy 分支按 Home 目录扫，已经同时覆盖 .workbuddy-ai 与 .workbuddy，
   // 所以国内版映射到同一个 target，不需要单独的清理分支。
   const t = targetId === "workbuddy-cn" ? "workbuddy" : targetId;
-  return ["-File", p("scripts", "clear-injected-prompts.ps1"), "-Apply", "-Targets", t];
+  const file = IS_WIN
+    ? p("scripts", "clear-injected-prompts.ps1")
+    : path.join(installDir(), "clear-injected-prompts.sh");
+  return IS_WIN ? ["-File", file, "-Apply", "-Targets", t] : [file, "-Apply", "-Targets", t];
 }
 
-// ---------- 运行 powershell ----------
+// ---------- 运行安装脚本 ----------
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -302,14 +354,33 @@ function killChild() {
   const pid = child.pid;
   child = null;
   try {
-    // /T 连带子进程一起杀，否则 powershell 退出后残留的安装进程仍会写文件
-    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], () => {});
+    if (IS_WIN) {
+      // /T 连带子进程一起杀，否则 powershell 退出后残留的安装进程仍会写文件
+      execFile("taskkill", ["/PID", String(pid), "/T", "/F"], () => {});
+    } else {
+      // 子进程以 detached 启动 = 自成进程组，负号 pid 整组杀掉。
+      // 装技能库时会派生出 cp/rsync 等子进程，只杀 bash 本身它们会继续写文件。
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* 已经退出了 */
+        }
+      }
+    }
   } catch {
     /* ignore */
   }
 }
 
-function runPowerShell(args, label, timeoutMs) {
+/**
+   跑安装脚本。参数与超时语义和 Windows 版完全一致，只是解释器不同：
+     · Windows：powershell.exe -File install.ps1 ...
+     · macOS/Linux：/bin/bash install.sh ...
+*/
+function runInstaller(args, label, timeoutMs) {
   return new Promise((resolve) => {
     if (child) {
       killChild();
@@ -321,11 +392,31 @@ function runPowerShell(args, label, timeoutMs) {
     childLabel = label;
     send("tool:status", { label, state: "running" });
 
-    const ps = spawn(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", ...args],
-      { cwd: toolDir(), windowsHide: true },
-    );
+    const env = { ...process.env };
+    let exe;
+    let argv;
+    let opts;
+
+    if (IS_WIN) {
+      exe = "powershell.exe";
+      argv = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", ...args];
+      opts = { cwd: toolDir(), windowsHide: true, env };
+    } else {
+      exe = "/bin/bash";
+      argv = args;
+      /*
+        lib.sh 靠 HS_NODE 定位 node：打包后的 Electron 二进制加上 ELECTRON_RUN_AS_NODE
+        就是一个完整的 node，所以用户机器上不需要另外装 node。
+        HS_ROOT 显式传过去，省得脚本靠相对路径猜（打包后是 Resources 目录）。
+      */
+      env.HS_NODE = process.execPath;
+      env.ELECTRON_RUN_AS_NODE = "1";
+      env.HS_ROOT = toolDir();
+      // detached 让脚本自成进程组，超时或取消时能整组杀掉（见 killChild）
+      opts = { cwd: toolDir(), env, detached: true };
+    }
+
+    const ps = spawn(exe, argv, opts);
     child = ps;
 
     ps.stdout.on("data", (buf) => {
@@ -790,7 +881,7 @@ function registerIpc() {
         installed: installedSnapshot().installed,
       };
     }
-    const res = await runPowerShell(args, `安装 ${targetId}`, INSTALL_TIMEOUT);
+    const res = await runInstaller(args, `安装 ${targetId}`, INSTALL_TIMEOUT);
     if (res.ok) {
       const st = loadState();
       st.installed[targetId] = PROMPT_LABEL[promptFile] || true;
@@ -800,7 +891,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("tool:uninstall", async (_e, targetId) => {
-    const res = await runPowerShell(uninstallArgs(targetId), `卸载 ${targetId}`, UNINSTALL_TIMEOUT);
+    const res = await runInstaller(uninstallArgs(targetId), `卸载 ${targetId}`, UNINSTALL_TIMEOUT);
     if (res.ok) {
       const st = loadState();
       delete st.installed[targetId];
@@ -819,7 +910,7 @@ function registerIpc() {
     //
     // 这一步按注入点和副产物直接扫，只清提示词，用户的 AGENTS.md / CLAUDE.md /
     // config.toml / 自己的备份一律不动（详见脚本头部注释）。
-    const sweep = await runPowerShell(
+    const sweep = await runInstaller(
       clearPromptsArgs(targetId),
       `清理 ${targetId} 提示词残留`,
       UNINSTALL_TIMEOUT,
@@ -833,7 +924,8 @@ function registerIpc() {
   });
 
   ipcMain.handle("tool:restartCodex", async () => {
-    const cmd =
+    // Windows：Codex 由 ChatGPT.exe（AppX 包 OpenAI.Codex*）承载
+    const winCmd =
       "$ErrorActionPreference = 'SilentlyContinue'; " +
       "$appId = (Get-StartApps | Where-Object { $_.AppID -like 'OpenAI.Codex*' } | Select-Object -First 1 -ExpandProperty AppID); " +
       "$chat = @(Get-Process ChatGPT | Where-Object { $_.Path -like '*OpenAI.Codex*' }); " +
@@ -847,14 +939,36 @@ function registerIpc() {
       // 等应用真起来再回话，避免「命令发出去了但其实没启动」也算成功
       "for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Milliseconds 500; if (@(Get-Process ChatGPT).Count -gt 0) { break } } " +
       "Write-Output ('launched:' + $appId + ' procs:' + @(Get-Process ChatGPT).Count)";
+
+    /*
+      macOS：Codex 由 ChatGPT.app 承载（配置目录 ~/.codex，与 Windows 一致）。
+      先 osascript 走优雅退出（让它把会话落盘），再 pkill 兜底，最后 open -a 拉起。
+      同样等进程真起来再回话，避免把「命令发出去了」报成成功。
+    */
+    const macCmd = [
+      'osascript -e \'quit app "ChatGPT"\' >/dev/null 2>&1 || true',
+      'pkill -f "ChatGPT" >/dev/null 2>&1 || true',
+      'sleep 1.2',
+      'if [ ! -d "/Applications/ChatGPT.app" ]; then echo "no-app"; exit 0; fi',
+      'open -a "ChatGPT" >/dev/null 2>&1 || true',
+      'for i in $(seq 1 20); do sleep 0.5; pgrep -f "ChatGPT" >/dev/null 2>&1 && break; done',
+      'pgrep -f "ChatGPT" >/dev/null 2>&1 && echo "launched:ChatGPT" || echo "no-launch"',
+    ].join("\n");
+
+    const cmd = IS_WIN ? winCmd : macCmd;
+    const exe = IS_WIN ? "powershell.exe" : "/bin/bash";
+    const argv = IS_WIN ? ["-NoProfile", "-Command", cmd] : ["-c", cmd];
+    // Windows 上不能带 detached（见下方原注释）；macOS 上 bash -c 直接等 close 即可。
+    const spawnOpts = IS_WIN ? { windowsHide: true } : {};
+
     return new Promise((resolve) => {
       /*
-        这里不能带 detached: true。Windows 上 detached 走 DETACHED_PROCESS，
+        Windows 上这里不能带 detached: true。detached 走 DETACHED_PROCESS，
         powershell 失去控制台后会在 ~100ms 内直接退出、命令一行都不执行
         （实测：带 detached 时 stdout 为空、94ms 退出；去掉后 900ms 正常返回），
         表现就是点「重启 Codex」毫无反应。父进程 await close 即可，无需 detach。
       */
-      const ps = spawn("powershell.exe", ["-NoProfile", "-Command", cmd], { windowsHide: true });
+      const ps = spawn(exe, argv, spawnOpts);
       let out = "";
       ps.stdout.on("data", (buf) => (out += buf.toString("utf8")));
       ps.stderr.on("data", (buf) => (out += buf.toString("utf8")));
@@ -865,8 +979,13 @@ function registerIpc() {
           ok: code === 0 && launched,
           code: code == null ? -1 : code,
           out: text,
-          // 没找到 AppID 时给一句能看懂的话，而不是把失败也报成「重启指令已发送」
-          error: launched ? undefined : text || "未找到 Codex 应用（Get-StartApps 无 OpenAI.Codex* 条目）",
+          // 没找到应用时给一句能看懂的话，而不是把失败也报成「重启指令已发送」
+          error: launched
+            ? undefined
+            : text ||
+              (IS_WIN
+                ? "未找到 Codex 应用（Get-StartApps 无 OpenAI.Codex* 条目）"
+                : "未找到 ChatGPT 应用（/Applications/ChatGPT.app）"),
         });
       });
       ps.on("error", (e) => resolve({ ok: false, code: -1, out, error: String(e && e.message) }));
@@ -1177,8 +1296,19 @@ function makeTrayIcon() {
   for (const f of candidates) {
     try {
       if (f && fs.existsSync(f)) {
-        const img = nativeImage.createFromPath(f);
-        if (!img.isEmpty()) return img;
+        let img = nativeImage.createFromPath(f);
+        if (!img.isEmpty()) {
+          if (IS_MAC) {
+            /*
+              macOS 菜单栏要的是「模板图」：系统只取 alpha 当蒙版，颜色由系统按
+              深浅色模式自己上。直接把彩色应用图标塞进去会在菜单栏里显得很脏，
+              所以缩到菜单栏高度再标记成模板图。
+            */
+            img = img.resize({ width: 18, height: 18 });
+            img.setTemplateImage(true);
+          }
+          return img;
+        }
       }
     } catch {
       /* 落到下面的兜底 */
@@ -1188,8 +1318,29 @@ function makeTrayIcon() {
     <rect width="32" height="32" rx="7" fill="#2E8FE0"/>
     <text x="16" y="23" font-size="20" text-anchor="middle" fill="#ffffff">寒</text>
   </svg>`;
-  return nativeImage.createFromDataURL(
+  const img = nativeImage.createFromDataURL(
     "data:image/svg+xml;base64," + Buffer.from(svg, "utf8").toString("base64"),
+  );
+  if (IS_MAC && !img.isEmpty()) img.setTemplateImage(true);
+  return img;
+}
+
+/**
+   macOS 必须有应用菜单，否则 Cmd+C / Cmd+V / Cmd+Q 全部失效 ——
+   Electron 不会自动补，菜单里的 role 才是这些快捷键的注册处。
+   Windows/Linux 走 autoHideMenuBar，这里显式清空。
+*/
+function setupMenu() {
+  if (!IS_MAC) {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      { role: "appMenu" },
+      { role: "editMenu" },
+      { role: "windowMenu" },
+    ]),
   );
 }
 
@@ -1212,6 +1363,9 @@ function setupTray() {
 
 // ---------- 生命周期 ----------
 
+// macOS 的应用菜单、Dock 悬浮名、通知来源都取 app.name，必须在 ready 之前定下来。
+app.setName(APP_NAME);
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -1221,6 +1375,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     registerIpc();
+    setupMenu();
     createWindow();
     setupTray();
     compactionWatcher.start();

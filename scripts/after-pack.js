@@ -38,6 +38,33 @@ function findRcedit() {
 
 exports.default = async function afterPack(context) {
   const appDir = context.appOutDir;
+  const platform = context.electronPlatformName || process.platform;
+  const appRoot = path.join(__dirname, "..");
+
+  /*
+    macOS 分支：.app 的图标由 electron-builder 自己从 build/icon.png 生成 icns，
+    不需要（也没有）rcedit 这一步。这里只做一件事 —— 把便携版卸载脚本放进
+    <App>.app/Contents/Resources，方便用户不用时能一键清干净。
+  */
+  if (platform === "darwin") {
+    const resDir = path.join(appDir, context.packager.appInfo.productFilename + ".app", "Contents", "Resources");
+    const src = path.join(appRoot, "scripts", "install", "portable-uninstall.sh");
+    if (!fs.existsSync(src)) {
+      console.log("[after-pack] 缺少 macOS 卸载脚本，跳过:", src);
+      return;
+    }
+    try {
+      fs.mkdirSync(resDir, { recursive: true });
+      const dst = path.join(resDir, "portable-uninstall.sh");
+      fs.copyFileSync(src, dst);
+      fs.chmodSync(dst, 0o755);
+      console.log("[after-pack] 已放入卸载脚本: Contents/Resources/portable-uninstall.sh");
+    } catch (e) {
+      console.log("[after-pack] 拷贝卸载脚本失败:", String(e && e.message));
+    }
+    return;
+  }
+
   const productName =
     (context.packager && context.packager.appInfo && context.packager.appInfo.productName) ||
     "app";
@@ -54,7 +81,6 @@ exports.default = async function afterPack(context) {
   }
 
   // 按变体选图标（build.mjs 会先把 PNG 转成 .ico）
-  const appRoot = path.join(__dirname, "..");
   let variant = "free";
   try {
     variant = JSON.parse(fs.readFileSync(path.join(appRoot, "variant.json"), "utf8")).variant;

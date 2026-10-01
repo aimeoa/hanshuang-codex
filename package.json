@@ -9,7 +9,9 @@
     "dev:electron": "electron .",
     "build": "vite build",
     "start": "npm run build && electron .",
-    "dist": "node scripts/build.mjs"
+    "dist": "node scripts/build.mjs",
+    "dist:mac": "node scripts/build.mjs free mac",
+    "uninstall:mac": "bash scripts/install/portable-uninstall.sh"
   },
   "dependencies": {
     "lucide-react": "^1.45.0",
@@ -129,8 +131,27 @@
       {
         "from": "build/icon-256.png",
         "to": "icon.png"
+      },
+      {
+        "from": "scripts/install",
+        "to": "scripts/install"
       }
     ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "extendInfo": {
+        "NSHumanReadableCopyright": "寒霜破甲工具"
+      }
+    },
+    "dmg": {
+      "artifactName": "${productName}-安装版-${version}-${arch}.${ext}"
+    },
     "win": {
       "target": [
         {

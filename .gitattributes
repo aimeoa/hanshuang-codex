@@ -1,0 +1,21 @@
+# 行尾统一
+#
+# 本仓库现在同时支持 Windows 与 macOS，两边的默认行尾不一样：
+#   · scripts/install/*.sh 是 macOS/Linux 上直接执行的脚本。
+#     如果以 CRLF 检出，会直接报 "bad interpreter: /bin/bash^M" 而跑不起来；
+#   · 而 Windows 上 core.autocrlf=true 的开发者很容易在无意中把它们改成 CRLF。
+# 所以这里显式钉死，不依赖每个人的本地 git 配置。
+
+*.sh    text eol=lf
+*.cjs   text eol=lf
+*.mjs   text eol=lf
+*.js    text eol=lf
+
+# 二进制资源不做行尾转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.icns  binary
+*.zip   binary
+*.woff2 binary
