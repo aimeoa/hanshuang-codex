@@ -71,6 +71,10 @@
         "to": "install-dsh.ps1"
       },
       {
+        "from": "install-omp.ps1",
+        "to": "install-omp.ps1"
+      },
+      {
         "from": "寒霜v5.md",
         "to": "寒霜v5.md"
       },

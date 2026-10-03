@@ -261,6 +261,27 @@ const FREE_TARGETS: Target[] = [
       { name: "豆包破甲 V3", desc: "寒霜工作规范 v3 · 写入云端全局记忆", file: "寒霜v3.md" },
     ],
   },
+  {
+    id: "omp",
+    icon: "Om",
+    nav: "Oh My Pi 破甲",
+    eyebrow: "OH MY PI 破甲",
+    title: "Oh My Pi 破甲",
+    desc:
+      "寒霜工作规范写进 Oh My Pi 的原生规则目录（<agentDir>/rules/寒霜注入.mdc，alwaysApply），" +
+      "进系统提示、对所有模型生效。这里只提供全局模式；provider 级（只在 Cursor 模型生效）" +
+      "走命令行 -Scope cursor，因为强对齐模型会把消息注入判成越狱而拒答。",
+    uninstallLabel: "卸载 Oh My Pi",
+    versions: [
+      {
+        name: "Oh My Pi 破甲 V4",
+        desc: "寒霜 v4 规范 → 全局规则（推荐）",
+        file: "寒霜v4.md",
+        recommended: true,
+      },
+      { name: "Oh My Pi 破甲 V3", desc: "寒霜 v3 规范 → 全局规则", file: "寒霜v3.md" },
+    ],
+  },
 ];
 
 export const TUTORIAL_TITLE = "使用教程";

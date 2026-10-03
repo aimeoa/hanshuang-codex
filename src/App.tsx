@@ -26,6 +26,7 @@ import {
   IconSparkles,
   IconTerminal,
   IconUser,
+  IconWrench,
 } from "./components/icons";
 import brandMark from "./assets/brand.png";
 import { InstallPage } from "./pages/InstallPage";
@@ -57,6 +58,7 @@ const TARGET_ICONS: Record<string, typeof IconSparkles> = {
   workbuddy: IconGlobe,
   dsh: IconDatabase,
   doubao: IconChat,
+  omp: IconWrench,
 };
 
 export function App() {

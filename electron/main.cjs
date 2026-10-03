@@ -130,6 +130,7 @@ const SCRIPTS = {
   "workbuddy-cn": "install-workbuddy.ps1",
   dsh: "install-dsh.ps1",
   doubao: "install-doubao.ps1",
+  omp: "install-omp.ps1",
 };
 
 const TARGET_IDS = Object.keys(SCRIPTS);
@@ -265,6 +266,10 @@ function installArgs(targetId, promptFile) {
     // 豆包：提示词写进云端全局记忆（AGENTS.md 式整份覆盖），不走本地文件、不需要技能库
     case "doubao":
       return ["-File", file, "-SourcePrompt", prompt];
+    // Oh My Pi：写原生规则目录，界面只走全局模式（-Scope all，见 data/targets.ts 的说明）。
+    // 脚本不装技能库：OMP 的技能走自己的发现源（claude/codex 用户目录、customDirectories）。
+    case "omp":
+      return ["-File", file, "-SourcePrompt", prompt, "-Scope", "all"];
     case "cursor":
       return ["-File", file, "-SourcePrompt", prompt];
     default:
@@ -995,9 +1000,10 @@ async function captureAll(dir) {
     ["codex", null],
     ["zcode", nav(1)],
     ["workbuddy", nav(4)],
-    ["dsh", nav(5)],
-    ["skills", nav(6)],
-    ["tutorial", nav(7)],
+    ["dsh", nav(6)],
+    ["omp", nav(8)],
+    ["skills", nav(9)],
+    ["tutorial", nav(10)],
     ["profile", 'document.querySelector(".app-nav-foot .settings-nav-item").click()'],
   ];
   // 截图前确保窗口真正可见并聚焦，否则 Chromium 会冻结 CSS 动画时间线

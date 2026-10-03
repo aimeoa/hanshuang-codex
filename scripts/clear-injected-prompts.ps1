@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 #  寒霜破甲工具 · 清除全部注入提示词（零提示词）
 #
-#  六个目标（codex / zcode / cursor / claude / workbuddy / dsh）各有一套安装脚本、
+#  各目标（codex / zcode / cursor / claude / workbuddy / dsh / doubao / omp）各有一套安装脚本、
 #  各有自己的注入点。这个脚本把它们全部还原到「没有注入过任何提示词」的状态。
 #
 #  安全规则（硬约束，改脚本时不要放宽）：
@@ -23,7 +23,7 @@
 param(
   [switch]$Apply,
   [int]$ScanDepth = 4,
-  # 只处理指定目标（codex / zcode / claude / dsh / workbuddy / cursor）。
+  # 只处理指定目标（codex / zcode / claude / dsh / doubao / workbuddy / cursor / omp）。
   # 留空 = 全部。app 里点单个目标的「卸载」时会传对应目标，避免连带清掉别的目标。
   [string[]]$Targets = @(),
   # 只把「待清除项」的路径按行输出（每行一个绝对路径），供 verify-uninstall.ps1 之类的
@@ -596,6 +596,44 @@ foreach ($entry in $skillHomeList) {
   }
 }
 
+# (e) Oh My Pi：install-omp.ps1 的两套产物 —— 原生规则（-Scope all）、provider 级规则源 +
+#     扩展（-Scope cursor），外加它自己的安装状态文件。位置随 PI_CODING_AGENT_DIR /
+#     OMP_PROFILE / PI_PROFILE 变（判定顺序与 install-omp.ps1 的 Resolve-AgentDir 一致）。
+#     只认带 HANSHUANG-OMP-INJECT 标记的文件；没标记的一律保留。
+if (Want 'omp') {
+  $ompAgent = $null
+  if (-not [string]::IsNullOrWhiteSpace($env:PI_CODING_AGENT_DIR)) { $ompAgent = $env:PI_CODING_AGENT_DIR }
+  elseif (-not [string]::IsNullOrWhiteSpace($env:OMP_PROFILE) -or -not [string]::IsNullOrWhiteSpace($env:PI_PROFILE)) {
+    $ompProfile = if (-not [string]::IsNullOrWhiteSpace($env:OMP_PROFILE)) { $env:OMP_PROFILE } else { $env:PI_PROFILE }
+    $ompAgent = Join-Path $H ".omp\profiles\$ompProfile\agent"
+  } else { $ompAgent = Join-Path $H '.omp\agent' }
+
+  $ompFiles = @(
+    (Join-Path $ompAgent 'rules\寒霜注入.mdc'),
+    (Join-Path $ompAgent 'hanshuang\寒霜注入.md'),
+    (Join-Path $ompAgent 'hooks\pre\hanshuang-cursor-scoped.ts')
+  )
+  foreach ($p in $ompFiles) {
+    if (-not (Test-Path -LiteralPath $p)) { continue }
+    $t = ''
+    try { $t = [IO.File]::ReadAllText($p) } catch { }
+    if ($t -match 'HANSHUANG-OMP-INJECT') {
+      Plan 'OMP 注入文件' $p '含注入标记'
+      [void]$plannedPaths.Add($p)
+    } else {
+      Keep ("OMP 路径下但无注入标记，保留：{0}" -f $p)
+    }
+  }
+
+  $ompState = Join-Path $ompAgent 'hs-install-state.json'
+  if (Test-Path -LiteralPath $ompState) {
+    $st = ''
+    try { $st = [IO.File]::ReadAllText($ompState) } catch { }
+    if ($st -match '寒霜注入|hanshuang-cursor-scoped') { Plan 'OMP 安装状态' $ompState '本工具的安装记录' }
+    else { Keep ("OMP 安装状态内容不是本工具的，保留：{0}" -f $ompState) }
+  }
+}
+
 # -----------------------------------------------------------------------------
 # 5. 报告
 # -----------------------------------------------------------------------------
@@ -711,6 +749,8 @@ foreach ($p in $plan) {
       # 4.5 节的三类：判定阶段已经用 Test-InjectionArtifact / SKILL.md 哈希确认过归属，这里直接删
       '注入副产物（内容是提示词）' { Remove-Item -LiteralPath $p.Path -Force -ErrorAction Stop }
       'DSH 注入文件'               { Remove-Item -LiteralPath $p.Path -Force -ErrorAction Stop }
+      'OMP 注入文件'               { Remove-Item -LiteralPath $p.Path -Force -ErrorAction Stop }
+      'OMP 安装状态'               { Remove-Item -LiteralPath $p.Path -Force -ErrorAction Stop }
       '随附包（确认是本工具的）'   { Remove-Item -LiteralPath $p.Path -Recurse -Force -ErrorAction Stop }
       '随附包备份'                 { Remove-Item -LiteralPath $p.Path -Recurse -Force -ErrorAction Stop }
       '技能（确认是本工具的）'     { Remove-Item -LiteralPath $p.Path -Recurse -Force -ErrorAction Stop }
