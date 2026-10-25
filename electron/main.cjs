@@ -4,6 +4,20 @@
 
   本构建已移除全部内置提示词与 V1–V5 版本：保留卸载 / 装回原始记忆 / 技能管理等
   清理与维护能力。渲染进程通过 preload 暴露的 window.hs 调用下面的 IPC。
+
+  本文件相对 v2.0.2 的修复（详见 PR 说明）：
+
+    [P0-1] writeDisabledSkills 的 TOML 清洗正则只删表头不删正文，
+           用户点一次「保存技能开关」就会写坏 config.toml
+    [P0-2] 全局单例 child 导致并发任务互相 taskkill，可能停在半写状态
+    [P1-3] 状态文件非原子写，崩溃后「已安装」记录全丢
+    [P1-4] 日志解码每次重解全部累积字节（O(n²)），长任务会卡主进程
+    [P1-5] codexHome() 首次同步扫 C:–Z: 24 个盘符，离线网络盘会卡住首帧
+    [P2-6] 状态文件写进 ~/.codex（别人的目录），且会顺手创建该目录
+    [P2-7] sandbox:false 无必要，preload 只用 contextBridge + ipcRenderer
+    [P2-8] tool:openQQ 接受任意 http(s) 链接
+    [P2-9] tool:uninstall / tool:skills:save 不校验入参
+    [P2-10] 开发期自动点击代码只看环境变量，打包后也可能触发
 */
 
 const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } = require("electron");
@@ -11,6 +25,9 @@ const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+
+// 纯函数（编码嗅探 / 流式解码 / TOML 块清洗）抽到 lib/pure.cjs，便于单测
+const { createConsoleDecoder, stripSkillBlocks, skillBlock } = require("./lib/pure.cjs");
 
 // 应用名由构建变体决定（scripts/build.mjs 写入 variant.json）
 let APP_NAME = "寒霜破甲工具";
@@ -27,12 +44,19 @@ const INSTALL_TIMEOUT = 600000;
 /** Seep 工作台首次部署要装 Python 依赖 + 解压离线包，给足 30 分钟。 */
 const SEEP_TIMEOUT = 1800000;
 
+/** tool:openQQ 允许用系统浏览器打开的域名（其余一律拒绝）。 */
+const OPEN_URL_HOSTS = new Set(["qm.qq.com", "api.zxcbug.com", "zxcbug.com", "www.zxcbug.com"]);
+
 let win = null;
 let tray = null;
 let quitting = false;
-let child = null; // 当前运行的 powershell
-let childTimer = null;
-let childLabel = "";
+
+// ---------- 任务队列（[P0-2] 原版是单例 child，后一个任务会 kill 前一个） ----------
+
+/** 当前正在跑的任务：{ label, pid }。 */
+let currentJob = null;
+/** 等待执行的任务：{ args, label, timeoutMs, resolve }。 */
+const jobQueue = [];
 
 // ---------- 路径 ----------
 
@@ -83,29 +107,72 @@ function homeDir() {
    Codex 的配置目录（home）。不能写死 ~/.codex：
      * 用户可能把 CODEX_HOME 指到别的盘（C 盘紧张时的常见做法，Codex 官方支持）
      * 也可能直接把 .codex 放在某个盘的根目录（迁移过数据目录的机器）
-   探测顺序：CODEX_HOME 环境变量 → ~/.codex → 各盘根目录下的 .codex → 兜底 ~/.codex。
-   写操作（如首次写状态文件）落在最后那个兜底路径上，不影响读取判断。
-   结果缓存，避免每次调用都扫一遍盘。
+
+   [P1-5] 原版在这里同步 for (C..Z) 做 existsSync —— 遇到离线的网络映射盘会阻塞数秒，
+   直接卡住窗口首帧。现在拆成两层：
+     codexHome()      —— 同步快路径，只读环境变量与 home，零磁盘 IO，随时可调；
+     detectCodexHome() —— 异步探测真实位置（含各盘根目录），在窗口显示后跑，
+                          探到就更新缓存，探不到就保持快路径结果。
 */
 let cachedCodexHome = null;
+
 function codexHome() {
   if (cachedCodexHome) return cachedCodexHome;
   const envHome = process.env.CODEX_HOME;
-  const def = path.join(homeDir(), ".codex");
-  if (envHome) {
-    try { if (fs.existsSync(envHome)) { cachedCodexHome = envHome; return cachedCodexHome; } } catch { /* 忽略 */ }
-  }
-  try { if (fs.existsSync(def)) { cachedCodexHome = def; return cachedCodexHome; } } catch { /* 忽略 */ }
-  for (let c = 67; c <= 90; c++) {   // C: 到 Z:
-    const p = String.fromCharCode(c) + ":\\" + ".codex";
-    try { if (fs.existsSync(p)) { cachedCodexHome = p; return cachedCodexHome; } } catch { /* 盘不存在 */ }
-  }
-  cachedCodexHome = def;
+  cachedCodexHome = envHome || path.join(homeDir(), ".codex");
   return cachedCodexHome;
 }
 
+/** 异步补全：真正去磁盘确认。不阻塞主线程，失败也不影响使用。 */
+async function detectCodexHome() {
+  const candidates = [];
+  if (process.env.CODEX_HOME) candidates.push(process.env.CODEX_HOME);
+  candidates.push(path.join(homeDir(), ".codex"));
+  for (let c = 67; c <= 90; c++) candidates.push(String.fromCharCode(c) + ":\\.codex");
+  for (const p of candidates) {
+    try {
+      await fs.promises.access(p);
+      cachedCodexHome = p;
+      return p;
+    } catch {
+      /* 不存在 / 盘不可达，试下一个 */
+    }
+  }
+  return cachedCodexHome;
+}
+
+/**
+   [P2-6] 状态文件不再写进 ~/.codex（那是 Codex 的目录，还会被顺手创建出来），
+   改到 Electron 的 userData 目录（%APPDATA%/<appName>/desktop-state.json）。
+   旧位置的 fj_desktop_state.json 在启动时自动迁移一次。
+*/
+function stateDir() {
+  try {
+    return app.getPath("userData");
+  } catch {
+    return path.join(homeDir(), ".hanshuang");
+  }
+}
+
 function statePath() {
+  return path.join(stateDir(), "desktop-state.json");
+}
+
+function legacyStatePath() {
   return path.join(codexHome(), "fj_desktop_state.json");
+}
+
+function migrateLegacyState() {
+  try {
+    const legacy = legacyStatePath();
+    const cur = statePath();
+    if (fs.existsSync(cur) || !fs.existsSync(legacy)) return;
+    fs.mkdirSync(path.dirname(cur), { recursive: true });
+    fs.copyFileSync(legacy, cur);
+    console.log("[state] 已从旧位置迁移状态文件:", legacy);
+  } catch (e) {
+    console.log("[state] 迁移旧状态失败（忽略）:", String(e && e.message));
+  }
 }
 
 function readJson(file, fallback) {
@@ -116,9 +183,21 @@ function readJson(file, fallback) {
   }
 }
 
+/** [P1-3] 原子写：先写 .tmp 再 rename。崩溃/断电不会留下截断的 JSON。 */
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+  const tmp = file + "." + process.pid + ".tmp";
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
 }
 
 // ---------- 任务定义（与 Python 版一致） ----------
@@ -138,6 +217,9 @@ const SCRIPTS = {
 
 const TARGET_IDS = Object.keys(SCRIPTS);
 
+function isTarget(id) {
+  return typeof id === "string" && Object.prototype.hasOwnProperty.call(SCRIPTS, id);
+}
 
 function p(...parts) {
   return path.join(toolDir(), ...parts);
@@ -266,8 +348,6 @@ function installArgs(targetId, promptFile) {
   }
 }
 
-
-
 function uninstallArgs(targetId) {
   const args = ["-File", p(SCRIPTS[targetId]), "-Uninstall"];
   // 国内版必须显式指定数据目录，否则卸载会走自动探测跑到国际版上去
@@ -309,24 +389,14 @@ function send(channel, payload) {
 /**
    中文 Windows 上 PowerShell 子进程按系统代码页（GBK/936）写标准输出，
    直接按 UTF-8 解会整段乱码（用户看到的「?????」日志就是这么来的）。
-   这里先按 UTF-8 严格解码；只要有一个非法字节就退回 GBK —— 两种来源都能读。
-*/
-function decodeConsoleOutput(buf) {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
-  } catch {
-    try {
-      return new TextDecoder("gbk").decode(buf);
-    } catch {
-      return buf.toString("utf8");
-    }
-  }
-}
 
-function killChild() {
-  if (!child) return;
-  const pid = child.pid;
-  child = null;
+   [P1-4] 解码实现已移到 lib/pure.cjs（createConsoleDecoder）：
+   头 4 KB 嗅探一次编码，之后用同一个 TextDecoder 以 stream 模式增量解码，
+   取代原版「每个 chunk 都重解全部累积字节」的 O(n²) 写法。
+*/
+
+function killPid(pid) {
+  if (!pid) return;
   try {
     // /T 连带子进程一起杀，否则 powershell 退出后残留的安装进程仍会写文件
     execFile("taskkill", ["/PID", String(pid), "/T", "/F"], () => {});
@@ -335,68 +405,111 @@ function killChild() {
   }
 }
 
+function killCurrentJob() {
+  if (!currentJob) return;
+  const pid = currentJob.pid;
+  currentJob = null;
+  killPid(pid);
+}
+
+/**
+   [P0-2] 串行队列。原版 runPowerShell 一进来就 killChild()，
+   于是「点安装 A → 立刻点安装 B」会把 A 的 PowerShell 干掉，
+   A 可能停在「AGENTS.md 只写了一半」的中间态。
+   现在：同时只跑一个，其余排队；同名任务去重，直接回「正在执行」。
+*/
 function runPowerShell(args, label, timeoutMs) {
+  if (quitting) {
+    return Promise.resolve({ ok: false, code: -1, timedOut: false, out: "", error: "程序正在退出" });
+  }
+  const busy = (currentJob && currentJob.label === label) || jobQueue.some((j) => j.label === label);
+  if (busy) {
+    return Promise.resolve({
+      ok: false,
+      code: -1,
+      timedOut: false,
+      out: "",
+      error: `「${label}」正在执行，请等它结束后再试`,
+    });
+  }
   return new Promise((resolve) => {
-    if (child) {
-      killChild();
-    }
-    if (childTimer) clearTimeout(childTimer);
+    jobQueue.push({ args, label, timeoutMs, resolve });
+    pumpQueue();
+  });
+}
 
+function pumpQueue() {
+  if (currentJob || quitting) return;
+  const job = jobQueue.shift();
+  if (!job) return;
+  spawnJob(job).then((res) => {
+    job.resolve(res);
+    pumpQueue();
+  });
+}
+
+function spawnJob(job) {
+  const { args, label, timeoutMs } = job;
+  return new Promise((resolve) => {
+    const decoder = createConsoleDecoder();
     let out = "";
-    // 累计原始字节再整段解码：多字节中文字符可能被 chunk 边界切开，逐块解码会碎成乱码
-    let rawOut = Buffer.alloc(0);
-    let sentChars = 0;
     let timedOut = false;
-    childLabel = label;
-    send("tool:status", { label, state: "running" });
+    let settled = false;
 
-    const onOutput = (buf) => {
-      rawOut = Buffer.concat([rawOut, buf]);
-      const text = decodeConsoleOutput(rawOut);
-      const delta = text.slice(sentChars);
-      sentChars = text.length;
-      if (rawOut.length > 4 * 1024 * 1024) {
-        // 超长输出：丢掉已经发过的前缀，免得内存一直涨
-        rawOut = rawOut.subarray(rawOut.length - 1024 * 1024);
-        sentChars = decodeConsoleOutput(rawOut).length;
-      }
-      if (!delta) return;
-      out = (out + delta).slice(-60000);
-      send("tool:log", { label, text: delta });
-    };
+    send("tool:status", { label, state: "running" });
 
     const ps = spawn(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", ...args],
       { cwd: toolDir(), windowsHide: true },
     );
-    child = ps;
+    currentJob = { label, pid: ps.pid };
+
+    const onOutput = (buf) => {
+      const delta = decoder.push(buf);
+      if (!delta) return;
+      out = (out + delta).slice(-60000);
+      send("tool:log", { label, text: delta });
+    };
 
     ps.stdout.on("data", onOutput);
     ps.stderr.on("data", onOutput);
 
-    childTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
       timedOut = true;
       send("tool:log", { label, text: "\n[超时] 已强制终止\n" });
-      killChild();
+      killPid(ps.pid);
     }, timeoutMs);
 
-    ps.on("error", (err) => {
-      if (childTimer) clearTimeout(childTimer);
-      child = null;
-      resolve({ ok: false, code: -1, out, timedOut, error: String(err && err.message) });
-    });
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const tail = decoder.end();
+      if (tail) {
+        out = (out + tail).slice(-60000);
+        send("tool:log", { label, text: tail });
+      }
+      currentJob = null;
+      resolve({ ...payload, out, timedOut });
+    };
 
-    ps.on("close", (code) => {
-      if (childTimer) clearTimeout(childTimer);
-      child = null;
-      resolve({ ok: !timedOut && code === 0, code: code == null ? -1 : code, out, timedOut });
-    });
+    ps.on("error", (err) => finish({ ok: false, code: -1, error: String(err && err.message) }));
+    ps.on("close", (code) => finish({ ok: !timedOut && code === 0, code: code == null ? -1 : code }));
   });
 }
 
-// ---------- 已安装状态 ----------
+/** 退出时：杀掉当前任务，并把排队中的任务全部以「已取消」返回，避免 Promise 悬挂。 */
+function abortAllJobs(reason) {
+  quitting = true;
+  killCurrentJob();
+  while (jobQueue.length) {
+    const job = jobQueue.shift();
+    job.resolve({ ok: false, code: -1, timedOut: false, out: "", error: reason });
+  }
+}
 
+// ---------- 已安装状态 ----------
 
 function loadState() {
   const st = readJson(statePath(), {});
@@ -420,11 +533,11 @@ function installedSnapshot() {
 // ---------- skills ----------
 
 function skillsDir() {
-  return path.join(codexHome(),"skills");
+  return path.join(codexHome(), "skills");
 }
 
 function configToml() {
-  return path.join(codexHome(),"config.toml");
+  return path.join(codexHome(), "config.toml");
 }
 
 /** 解析 [[skills.config]] 块，返回被禁用的 skill 目录名集合。 */
@@ -450,6 +563,15 @@ function readDisabledSkills() {
   return disabled;
 }
 
+/**
+   [P0-1] 原版用一行正则清块：
+     text.replace(/^\[\[skills\.config\]\]\s*$[\s\S]*?(?=^\[\[|$)/gm, "")
+   lookahead 里的 $ 在 m 标志下匹配「任意行尾」，非贪婪量词一遇到行尾就停，
+   结果只删掉表头这一行，正文 path= / enabled= 全部留下，
+   变成上一张表的成员 —— 用户点一次「保存技能开关」就把 config.toml 写坏了。
+
+   修好的 stripSkillBlocks 在 lib/pure.cjs（按行切块），这里只负责读写文件。
+*/
 function writeDisabledSkills(disabled) {
   const cp = configToml();
   let text;
@@ -458,16 +580,26 @@ function writeDisabledSkills(disabled) {
   } catch {
     return { ok: false, error: "找不到 config.toml" };
   }
-  text = text.replace(/^\[\[skills\.config\]\]\s*$[\s\S]*?(?=^\[\[|$)/gm, "");
-  text = text.replace(/\s+$/, "") + "\n";
-  for (const name of [...disabled].sort()) {
-    const sk = path.join(skillsDir(), name, "SKILL.md").replace(/\\/g, "/");
-    text += `\n[[skills.config]]\npath = "${sk}"\nenabled = false\n`;
+  const names = [...new Set((Array.isArray(disabled) ? disabled : []).filter((n) => typeof n === "string" && n))]
+    .filter((n) => !/[\\/\r\n"]/.test(n)) // 目录名不允许带分隔符/引号，防注入
+    .sort();
+
+  let next = stripSkillBlocks(text);
+  for (const name of names) {
+    next += skillBlock(path.join(skillsDir(), name, "SKILL.md"), false);
   }
+
+  const tmp = cp + ".hanshuang.tmp";
   try {
-    fs.writeFileSync(cp, text, "utf8");
+    fs.writeFileSync(tmp, next, "utf8");
+    fs.renameSync(tmp, cp);
     return { ok: true };
   } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
     return { ok: false, error: String(e.message) };
   }
 }
@@ -497,7 +629,6 @@ function listSkills() {
   });
 }
 
-
 // ---------- IPC ----------
 
 function registerIpc() {
@@ -515,7 +646,7 @@ function registerIpc() {
   */
   ipcMain.handle("tool:install", async (_e, targetId) => {
     const installed = installedSnapshot().installed;
-    if (!SCRIPTS[targetId]) {
+    if (!isTarget(targetId)) {
       return { ok: false, code: -1, timedOut: false, out: `未知的破甲目标：${targetId}`, installed };
     }
     const prompt = memoryPrompt();
@@ -566,8 +697,18 @@ function registerIpc() {
     return runPowerShell(["-File", script, "-Detailed"], "Seep 工作台自检", SEEP_TIMEOUT);
   });
 
-
   ipcMain.handle("tool:uninstall", async (_e, targetId) => {
+    // [P2-9] 原版不校验，uninstallArgs 会抛异常，变成 IPC rejection（渲染层拿不到结构化错误）
+    if (!isTarget(targetId)) {
+      return {
+        ok: false,
+        code: -1,
+        timedOut: false,
+        out: `未知的破甲目标：${targetId}`,
+        error: `未知的破甲目标：${targetId}`,
+        installed: installedSnapshot().installed,
+      };
+    }
     const res = await runPowerShell(uninstallArgs(targetId), `卸载 ${targetId}`, UNINSTALL_TIMEOUT);
     if (res.ok) {
       const st = loadState();
@@ -606,7 +747,7 @@ function registerIpc() {
   // 零残留），跟「只想换回原版」正好相反。注入内容本身也不需要它兜底：本 handler 与卸载
   // 走同一段还原逻辑，各注入点（AGENTS.md / CLAUDE.md / config.toml / 记忆档案）都在里面处理掉了。
   ipcMain.handle("tool:restoreMemory", async (_e, targetId) => {
-    if (!SCRIPTS[targetId]) {
+    if (!isTarget(targetId)) {
       return {
         ok: false,
         code: -1,
@@ -648,11 +789,10 @@ function registerIpc() {
         表现就是点「重启 Codex」毫无反应。父进程 await close 即可，无需 detach。
       */
       const ps = spawn("powershell.exe", ["-NoProfile", "-Command", cmd], { windowsHide: true });
+      const decoder = createConsoleDecoder();
       let out = "";
-      let raw = Buffer.alloc(0);
       const onChunk = (buf) => {
-        raw = Buffer.concat([raw, buf]);
-        out = decodeConsoleOutput(raw);
+        out = (out + decoder.push(buf)).slice(-60000);
       };
       ps.stdout.on("data", onChunk);
       ps.stderr.on("data", onChunk);
@@ -672,16 +812,30 @@ function registerIpc() {
   });
 
   ipcMain.handle("tool:skills:list", () => listSkills());
-  ipcMain.handle("tool:skills:save", (_e, disabled) => writeDisabledSkills(disabled || []));
 
+  // [P2-9] 入参校验：只接受字符串数组，避免把对象/函数塞进 config.toml
+  ipcMain.handle("tool:skills:save", (_e, disabled) => {
+    if (!Array.isArray(disabled)) return { ok: false, error: "参数必须是数组" };
+    return writeDisabledSkills(disabled);
+  });
+
+  // [P2-8] 原版接受任意 http(s) URL，等于把「用系统浏览器打开任意链接」暴露给渲染层。
+  // 渲染层被 XSS 或恶意插件影响时，可以拉起钓鱼页。改成域名白名单。
   ipcMain.handle("tool:openQQ", async (_e, url) => {
-    if (typeof url !== "string" || !/^https?:\/\//.test(url)) {
-      console.log("[openQQ] 拒绝非 http(s) 链接:", url);
+    let u;
+    try {
+      u = new URL(String(url));
+    } catch {
+      console.log("[openQQ] 拒绝非法链接:", url);
       return { ok: false, error: "invalid url" };
     }
+    if (!/^https?:$/.test(u.protocol) || !OPEN_URL_HOSTS.has(u.hostname)) {
+      console.log("[openQQ] 拒绝非白名单链接:", u.hostname);
+      return { ok: false, error: "host not allowed" };
+    }
     try {
-      await shell.openExternal(url);
-      console.log("[openQQ] 已用系统浏览器打开:", url.slice(0, 60) + "…");
+      await shell.openExternal(u.toString());
+      console.log("[openQQ] 已用系统浏览器打开:", u.hostname);
       return { ok: true };
     } catch (e) {
       console.log("[openQQ] 打开失败:", String(e && e.message));
@@ -723,7 +877,9 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // [P2-7] preload 只用了 contextBridge + ipcRenderer，两者在沙箱内都可用，
+      // 没有理由关掉沙箱。
+      sandbox: true,
     },
   });
 
@@ -772,7 +928,9 @@ function createWindow() {
   }
 
   // 开发用：HS_CAPTURE=<dir> 时逐页截图后退出，用于验收版式。
-  if (process.env.HS_CAPTURE) {
+  // [P2-10] 加 !app.isPackaged 闸门：打包后即使环境里残留 HS_CAPTURE / HS_INSTALLTEST，
+  // 也不会真的去点「安装」。
+  if (!app.isPackaged && process.env.HS_CAPTURE) {
     win.webContents.once("did-finish-load", () => {
       captureAll(process.env.HS_CAPTURE).catch(() => app.quit());
     });
@@ -1018,6 +1176,10 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // [P2-6] 旧状态文件迁移（旧版写在 ~/.codex/fj_desktop_state.json）
+    migrateLegacyState();
+    // [P1-5] 异步探测 Codex 数据目录，不阻塞首帧；探到就更新缓存
+    detectCodexHome().catch(() => {});
     registerIpc();
     createWindow();
     setupTray();
@@ -1029,8 +1191,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on("before-quit", () => {
-    quitting = true;
-    killChild();
+    abortAllJobs("程序正在退出");
     if (tray) {
       tray.destroy();
       tray = null;

@@ -10,6 +10,7 @@
     "build": "vite build",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "start": "npm run build && electron .",
+    "test:main": "node scripts/verify-main.mjs",
     "dist": "node scripts/build.mjs"
   },
   "dependencies": {
