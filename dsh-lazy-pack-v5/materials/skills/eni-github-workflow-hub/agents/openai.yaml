@@ -1,0 +1,4 @@
+interface:
+  display_name: "小寒 GitHub Workflow Hub"
+  short_description: "Pinned official sources and local tool adapters."
+  default_prompt: "Use $eni-github-workflow-hub to execute, verify, and deliver this task."

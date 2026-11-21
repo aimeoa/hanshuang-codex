@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linker Fake-Load Unwrapper"
+  short_description: "Recover fake-load linker runtimes."
+  default_prompt: "Use $linker-fake-load-unwrapper to analyze this fake-load linker protected ELF and recover the runtime image."

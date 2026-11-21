@@ -1,0 +1,6 @@
+interface:
+  display_name: "ELF Local Auth Patcher 2.1 Fusion"
+  short_description: "融合 1.0/2.0 的 ELF/APK 本地授权测试、逆向、验证与排障"
+  default_prompt: "Use $elf-local-auth-patcher to analyze my self-owned APK/ELF authorization flow, create a local test patch, and verify ELF/APK integrity."
+policy:
+  allow_implicit_invocation: true

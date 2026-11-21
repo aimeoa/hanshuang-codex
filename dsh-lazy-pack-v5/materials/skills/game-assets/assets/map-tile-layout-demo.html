@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meowa 地块拼接与绘制预览器</title>
+  <style>
+    :root { color: #111827; background: #eef1f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; padding: 20px 16px 36px; }
+    main { width: 100%; margin: 0; }
+    .hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+    .eyebrow { margin-bottom: 8px; color: #64748b; font-size: 12px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); letter-spacing: -.035em; }
+    p { max-width: 820px; margin: 10px 0 0; color: #64748b; font-size: 14px; line-height: 1.65; }
+    .panel { margin-top: 22px; border: 1px solid #d8dee8; border-radius: 20px; background: #fff; padding: 20px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08); }
+    .controls { display: grid; grid-template-columns: minmax(180px, 1.3fr) minmax(210px, 1.5fr) repeat(3, minmax(112px, .7fr)) minmax(120px, .6fr); gap: 12px; align-items: end; padding: 14px; border: 1px solid #e2e8f0; border-radius: 14px; background: #f8fafc; }
+    label { display: grid; gap: 7px; color: #475569; font-size: 12px; font-weight: 700; }
+    input, select, button { min-height: 42px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #111827; font: inherit; padding: 9px 11px; transition: border-color .15s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease; }
+    input:hover, select:hover, button:hover { border-color: #94a3b8; }
+    input:focus, select:focus, button:focus-visible { outline: none; border-color: #0f172a; box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.12); }
+    input[type="file"] { padding: 4px; color: #64748b; font-size: 12px; }
+    input[type="file"]::file-selector-button { height: 32px; margin-right: 9px; border: 0; border-radius: 7px; background: #e2e8f0; color: #0f172a; padding: 0 11px; font: inherit; font-weight: 700; cursor: pointer; }
+    button { cursor: pointer; font-weight: 720; }
+    button:hover { background: #f8fafc; }
+    button.primary, button.active { border-color: #0f172a; background: #0f172a; color: #fff; }
+    button.primary:hover, button.active:hover { background: #1e293b; }
+    button:disabled { cursor: not-allowed; opacity: 0.42; }
+    .checkbox { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 8px; }
+    .checkbox input { width: 17px; height: 17px; min-height: auto; accent-color: #0f172a; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; padding: 2px 0; }
+    .toolbar .spacer { flex: 1; }
+    .status { display: flex; align-items: center; gap: 9px; margin-top: 14px; padding: 11px 13px; border: 1px solid #e2e8f0; border-radius: 11px; background: #f8fafc; color: #475569; font-size: 13px; }
+    .status::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 999px; background: #64748b; }
+    .status.error { border: 1px solid #b91c1c; color: #991b1b; background: #fff7f7; }
+    .status.error::before { background: #b91c1c; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 16px; margin-top: 16px; }
+    .canvas-shell { min-height: 480px; max-height: 760px; overflow: auto; border: 1px solid #d8dee8; border-radius: 14px; background: #e7ebf0; padding: 20px; box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.05); }
+    canvas { display: block; flex: none; width: auto; height: auto; min-width: 1px; min-height: 1px; max-width: none; max-height: none; background: transparent; cursor: crosshair; }
+    canvas.pixel-sampling { image-rendering: pixelated; image-rendering: crisp-edges; }
+    canvas.smooth-sampling { image-rendering: auto; }
+    .palette { min-height: 0; border: 1px solid #d8dee8; border-radius: 14px; background: #f8fafc; padding: 12px; }
+    .palette h2 { margin: 2px 2px 12px; color: #334155; font-size: 13px; }
+    .palette-list { display: grid; gap: 8px; max-height: 704px; overflow: auto; padding-right: 2px; }
+    .palette-item { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; width: 100%; min-height: 0; border-color: #d8dee8; padding: 8px; text-align: left; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03); }
+    .palette-thumb { display: block; width: 72px; height: 72px; border: 1px solid #d8dee8; border-radius: 7px; background: #e7ebf0; }
+    .palette-copy { min-width: 0; }
+    .palette-item strong, .palette-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .palette-item span { margin-top: 5px; color: #64748b; font-size: 11px; font-weight: 550; }
+    .palette-item.active span { color: #e2e8f0; }
+    .side-only { display: none; }
+    .side-workspace { grid-template-columns: minmax(0, 1fr); }
+    .side-canvas-shell { width: 100%; min-height: 0; max-height: none; overflow: auto; padding: 0; background: #dfe4ea; }
+    #sideCanvas { margin-inline: auto; cursor: grab; }
+    #sideCanvas.dragging { cursor: grabbing; }
+    #sideCanvas:focus-visible { outline: 3px solid #0f172a; outline-offset: 3px; }
+    .side-layer-list { display: grid; grid-template-columns: repeat(3, minmax(320px, 1fr)); gap: 12px; max-height: none; overflow-x: auto; padding: 2px; }
+    .side-layer-card { border: 1px solid #d8dee8; border-radius: 11px; background: #fff; padding: 10px; box-shadow: 0 1px 2px rgba(15, 23, 42, .03); cursor: pointer; }
+    .side-layer-card.selected { border-color: #0f172a; box-shadow: 0 0 0 2px rgba(15, 23, 42, .1); }
+    .side-layer-head { display: grid; gap: 8px; }
+    .side-layer-thumb { display: block; width: 320px; height: 160px; border: 1px solid #d8dee8; border-radius: 7px; background: #e7ebf0; }
+    .side-layer-copy { min-width: 0; }
+    .side-layer-copy strong, .side-layer-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .side-layer-copy span { margin-top: 5px; color: #64748b; font-size: 11px; }
+    .side-layer-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .side-layer-fields input { width: 100%; min-height: 36px; padding: 7px 8px; }
+    .side-visible-toggle { display: flex; align-items: center; gap: 7px; margin-top: 9px; color: #475569; font-size: 12px; font-weight: 700; }
+    .side-visible-toggle input { width: 16px; height: 16px; min-height: 0; accent-color: #0f172a; }
+    .side-hint { margin: 0 2px 12px; color: #64748b; font-size: 11px; line-height: 1.5; }
+    kbd { border: 1px solid #cbd5e1; border-bottom-width: 2px; border-radius: 5px; background: #fff; padding: 1px 5px; color: #334155; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media (max-width: 1120px) { .controls { grid-template-columns: repeat(3, minmax(150px, 1fr)); } .side-layer-list { grid-template-columns: repeat(3, minmax(300px, 1fr)); } }
+    @media (max-width: 760px) { body { padding: 18px 12px 32px; } .hero { display: block; } .panel { padding: 12px; border-radius: 16px; } .controls { grid-template-columns: 1fr 1fr; padding: 12px; } .workspace { grid-template-columns: 1fr; } .canvas-shell { min-height: 360px; padding: 12px; } .palette-list { max-height: 320px; } }
+    @media (max-width: 480px) { .controls { grid-template-columns: 1fr; } .toolbar .spacer { display: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div>
+        <div class="eyebrow">Meowa Map Lab</div>
+        <h1>地块拼接与绘制预览器</h1>
+        <p>在同一个本地工具中切换横版卷轴、Isometric、Hex 与 Dual-grid，检查视差、拼接、边缘和布局。</p>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="controls">
+        <label>地图模式
+          <select id="modeInput">
+            <option value="isometric">Pixel Isometric</option>
+            <option value="hex">Pixel Hex Isometric</option>
+            <option value="hd-isometric">HD Isometric</option>
+            <option value="hd-hex-isometric">HD Hex Isometric</option>
+            <option value="dual-grid">Top-down Dual-grid 15</option>
+            <option value="iso-dual-grid">Isometric Dual-grid 15</option>
+            <option value="side-scrolling">Side View</option>
+          </select>
+        </label>
+        <label>加载图片
+          <input id="imageInput" type="file" accept="image/png,image/webp" multiple>
+        </label>
+        <label class="tile-only">地图列数
+          <input id="columnsInput" type="number" min="2" max="32" value="8">
+        </label>
+        <label class="tile-only">地图行数
+          <input id="rowsInput" type="number" min="2" max="32" value="6">
+        </label>
+        <label>整数预览倍率
+          <select id="zoomInput">
+            <option value="1">1× 原始</option><option value="2">2×</option>
+            <option value="3">3×</option><option value="4">4×</option>
+          </select>
+        </label>
+        <label class="checkbox tile-only"><input id="gridInput" type="checkbox" checked>显示网格</label>
+        <label class="side-only">全局滚动速度
+          <input id="sideSpeedInput" type="number" min="0" max="300" step="5" value="80">
+        </label>
+      </div>
+
+      <div class="toolbar">
+        <button id="paintButton" class="active tile-only" type="button">画笔</button>
+        <button id="eraseButton" class="tile-only" type="button">橡皮</button>
+        <button id="fillButton" class="tile-only" type="button">填充</button>
+        <button id="clearButton" class="tile-only" type="button">清空地图</button>
+        <span class="spacer"></span>
+        <button id="removeImagesButton" class="tile-only" type="button">移除图片</button>
+        <button id="exportButton" class="primary tile-only" type="button" disabled>导出预览 PNG</button>
+        <button id="sidePlayButton" class="active side-only" type="button">暂停</button>
+        <button id="sideResetButton" class="side-only" type="button">重置位置</button>
+        <button id="sideExportButton" class="primary side-only" type="button" disabled>导出当前帧</button>
+      </div>
+
+      <div id="status" class="status">请选择用户生成的 PNG 或 WebP。普通 isometric/hex 可加载多张独立地块；dual-grid 模式加载一张 4×4 图集。</div>
+      <div id="tileWorkspace" class="workspace tile-only">
+        <div class="canvas-shell"><canvas id="mapCanvas" class="pixel-sampling" width="1" height="1"></canvas></div>
+        <aside class="palette"><h2>已加载地块</h2><div id="paletteList" class="palette-list"></div></aside>
+      </div>
+      <div id="sideWorkspace" class="workspace side-workspace side-only">
+        <div class="canvas-shell side-canvas-shell"><canvas id="sideCanvas" class="pixel-sampling" width="1" height="1" tabindex="0" aria-label="横版卷轴预览画布，方向键移动猫猫，空格跳跃"></canvas></div>
+        <aside class="palette">
+          <h2>已加载图层</h2>
+          <p class="side-hint">缩略图完整显示整个图层。先选中图层，再在主画布上下拖动。猫可拖动，方向键移动，空格跳跃。</p>
+          <div id="sideLayerList" class="side-layer-list"></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script src="../scripts/map-tile-layout.js"></script>
+  <script id="meowa-map-preload" type="application/json">{"images":[]}</script>
+  <script>
+    const layout = window.MeowaMapTileLayout;
+    const BUILT_IN_CAT_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAABACAYAAAD1Xam+AAAACXBIWXMAAAsTAAALEwEAmpwYAAAE9GlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgOS4xLWMwMDMgNzkuOTY5MGE4N2ZjLCAyMDI1LzAzLzA2LTIwOjUwOjE2ICAgICAgICAiPiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPiA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtbG5zOmRjPSJodHRwOi8vcHVybC5vcmcvZGMvZWxlbWVudHMvMS4xLyIgeG1sbnM6cGhvdG9zaG9wPSJodHRwOi8vbnMuYWRvYmUuY29tL3Bob3Rvc2hvcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RFdnQ9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZUV2ZW50IyIgeG1wOkNyZWF0b3JUb29sPSJBZG9iZSBQaG90b3Nob3AgMjcuMCAoTWFjaW50b3NoKSIgeG1wOkNyZWF0ZURhdGU9IjIwMjYtMDctMDFUMjE6MjU6MjIrMDg6MDAiIHhtcDpNb2RpZnlEYXRlPSIyMDI2LTA3LTAxVDIxOjI5OjAxKzA4OjAwIiB4bXA6TWV0YWRhdGFEYXRlPSIyMDI2LTA3LTAxVDIxOjI5OjAxKzA4OjAwIiBkYzpmb3JtYXQ9ImltYWdlL3BuZyIgcGhvdG9zaG9wOkNvbG9yTW9kZT0iMyIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDpiZmUxNjQ4OS1lZWEzLTQ1NzUtYmI0MC1iMzNjNzc1NzZmM2UiIHhtcE1NOkRvY3VtZW50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";
+    const TILE_SIZE = 64;
+    const PADDING = 32;
+    const MAX_CANVAS_EDGE = 16384;
+    const MAX_CANVAS_PIXELS = 64 * 1024 * 1024;
+    const state = {
+      images: [], selectedId: "", cells: [], tool: "paint", pointerDown: false,
+      lastCell: "", renderQueued: false, libraries: Object.create(null),
+    };
+    const sideState = {
+      layers: [], player: null, selectedLayerRole: "foreground", active: false,
+      playing: true, scroll: 0, lastTime: 0, playerX: null, playerY: null,
+      playerVelocityY: 0, playerDirection: 1, keys: new Set(), drag: null,
+    };
+
+    const elements = {
+      mode: document.querySelector("#modeInput"),
+      images: document.querySelector("#imageInput"),
+      columns: document.querySelector("#columnsInput"),
+      rows: document.querySelector("#rowsInput"),
+      zoom: document.querySelector("#zoomInput"),
+      grid: document.querySelector("#gridInput"),
+      paint: document.querySelector("#paintButton"),
+      erase: document.querySelector("#eraseButton"),
+      fill: document.querySelector("#fillButton"),
+      clear: document.querySelector("#clearButton"),
+      removeImages: document.querySelector("#removeImagesButton"),
+      export: document.querySelector("#exportButton"),
+      status: document.querySelector("#status"),
+      paletteList: document.querySelector("#paletteList"),
+      map: document.querySelector("#mapCanvas"),
+      sideSpeed: document.querySelector("#sideSpeedInput"),
+      sidePlay: document.querySelector("#sidePlayButton"),
+      sideReset: document.querySelector("#sideResetButton"),
+      sideExport: document.querySelector("#sideExportButton"),
+      sideLayerList: document.querySelector("#sideLayerList"),
+      sideCanvas: document.querySelector("#sideCanvas"),
+    };
+
+    const clampInteger = (value, min, max, fallback) => {
+      const parsed = Number.parseInt(value, 10);
+      return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+    };
+    const integerZoom = (value) => {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4 ? parsed : 1;
+    };
+    const dimensions = () => ({
+      columns: clampInteger(elements.columns.value, 2, 32, 8),
+      rows: clampInteger(elements.rows.value, 2, 32, 6),
+    });
+    const isHdMode = () => elements.mode.value === "hd-isometric" || elements.mode.value === "hd-hex-isometric";
+    const isHexMode = () => elements.mode.value === "hex" || elements.mode.value === "hd-hex-isometric";
+    const isProjected = () => ["isometric", "hex", "hd-isometric", "hd-hex-isometric"].includes(elements.mode.value);
+    const configureCanvasSampling = (canvas, context, smooth) => {
+      context.imageSmoothingEnabled = smooth;
+      if (smooth) context.imageSmoothingQuality = "high";
+      canvas.classList.toggle("smooth-sampling", smooth);
+      canvas.classList.toggle("pixel-sampling", !smooth);
+    };
+    const screenPixelRatio = () => Math.max(1, Number(window.devicePixelRatio) || 1);
+    const hdBackingScale = (zoom) => integerZoom(zoom) * screenPixelRatio();
+    const normalizedFootprint = (item) => ({
+      width: clampInteger(item?.footprintWidth, 1, 4, 1),
+      height: clampInteger(item?.footprintHeight, 1, 4, 1),
+    });
+    const selectedImage = () => state.images.find((item) => item.id === state.selectedId) || null;
+    const setStatus = (message, isError = false) => {
+      elements.status.textContent = message;
+      elements.status.classList.toggle("error", isError);
+    };
+    const makeCells = (previous = []) => {
+      const { columns, rows } = dimensions();
+      return Array.from({ length: rows }, (_, row) => (
+        Array.from({ length: columns }, (_, column) => previous[row]?.[column] ?? (isProjected() ? null : false))
+      ));
+    };
+    const resetCells = () => { state.cells = makeCells([]); };
+    const resizeCells = () => { state.cells = makeCells(state.cells); };
+    const isFilled = (column, row) => Boolean(state.cells[row]?.[column]);
+    const isDefaultRingCell = (column, row, columns, rows) => {
+      const normalizedX = (column - (columns - 1) / 2) / Math.max(columns / 2, 1);
+      const normalizedY = (row - (rows - 1) / 2) / Math.max(rows / 2, 1);
+      const distance = Math.hypot(normalizedX, normalizedY);
+      return distance >= 0.42 && distance <= 0.95;
+    };
+    const footprintOffsets = (tile, anchorRow) => {
+      const footprint = normalizedFootprint(tile);
+      if (isHexMode() && footprint.width === 2 && footprint.height === 2 && anchorRow % 2 === 0) {
+        return [[0, 0], [1, 0], [-1, 1], [0, 1]];
+      }
+      const offsets = [];
+      for (let row = 0; row < footprint.height; row += 1) {
+        for (let column = 0; column < footprint.width; column += 1) offsets.push([column, row]);
+      }
+      return offsets;
+    };
+    const clearPlacementAt = (column, row) => {
+      const placement = state.cells[row]?.[column];
+      if (!placement || typeof placement !== "object") {
+        if (state.cells[row]) state.cells[row][column] = null;
+        return;
+      }
+      state.cells.forEach((cells) => cells.forEach((candidate, index) => {
+        if (candidate?.anchorColumn === placement.anchorColumn && candidate?.anchorRow === placement.anchorRow) cells[index] = null;
+      }));
+    };
+    const placeTileAt = (column, row, tile) => {
+      if (!tile) return false;
+      const { columns, rows } = dimensions();
+      const offsets = footprintOffsets(tile, row);
+      const targets = offsets.map(([columnOffset, rowOffset]) => ({
+        column: column + columnOffset,
+        row: row + rowOffset,
+        columnOffset,
+        rowOffset,
+      }));
+      if (targets.some((target) => target.column < 0 || target.row < 0 || target.column >= columns || target.row >= rows)) return false;
+      targets.forEach((target) => clearPlacementAt(target.column, target.row));
+      targets.forEach((target) => {
+        state.cells[target.row][target.column] = {
+          tileId: tile.id,
+          anchorColumn: column,
+          anchorRow: row,
+          columnOffset: target.columnOffset,
+          rowOffset: target.rowOffset,
+        };
+      });
+      return true;
+    };
+
+    const decodeImage = (file) => new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => resolve({
+        id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        image,
+        url,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        footprintWidth: 1,
+        footprintHeight: 1,
+      });
+      image.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`无法读取 ${file.name}`)); };
+      image.src = url;
+    });
+
+    const decodePreloadedImage = (item, index) => new Promise((resolve, reject) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => resolve({
+        id: `preloaded-${index}`,
+        name: item.name || `tile-${index + 1}.png`,
+        image,
+        url: "",
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        footprintWidth: clampInteger(item.footprintWidth, 1, 4, 1),
+        footprintHeight: clampInteger(item.footprintHeight, 1, 4, 1),
+      });
+      image.onerror = () => reject(new Error(`无法读取内嵌图片 ${item.name || index + 1}`));
+      image.src = item.src;
+    });
+
+    const releaseImages = () => {
+      state.images.forEach((item) => { if (item.url) URL.revokeObjectURL(item.url); });
+      state.images = [];
+      state.selectedId = "";
+      elements.images.value = "";
+      resetCells();
+    };
+
+    const useLoadedImages = (loaded) => {
+      releaseImages();
+      state.images = isProjected() ? loaded : loaded.slice(0, 1);
+      loaded.slice(state.images.length).forEach((item) => { if (item.url) URL.revokeObjectURL(item.url); });
+      state.selectedId = state.images[0]?.id || "";
+      resetCells();
+      const { columns, rows } = dimensions();
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < columns; column += 1) {
+          const filled = isDefaultRingCell(column, row, columns, rows);
+          if (isProjected()) {
+            if (filled && !state.cells[row][column]) {
+              placeTileAt(column, row, state.images[(row * columns + column) % state.images.length]);
+            }
+          } else {
+            state.cells[row][column] = filled;
+          }
+        }
+      }
+      renderPalette();
+      render();
+    };
+
+    const activateModeLibrary = () => {
+      const loaded = state.libraries[elements.mode.value];
+      if (Array.isArray(loaded) && loaded.length) {
+        useLoadedImages(loaded);
+        return;
+      }
+      releaseImages();
+      renderPalette();
+      render();
+    };
+
+    const atlasMetrics = () => {
+      const atlas = state.images[0];
+      if (!atlas) return null;
+      if (elements.mode.value === "dual-grid") {
+        const size = atlas.width / 4;
+        if (!Number.isInteger(size) || atlas.height !== size * 4) {
+          throw new Error(`Top-down dual-grid 图集必须是 4×4 个正方形地块；当前为 ${atlas.width}×${atlas.height}。`);
+        }
+        return { tileSize: size, tileWidth: size, tileHeight: size };
+      }
+      if (elements.mode.value === "iso-dual-grid") {
+        const size = atlas.width / 8;
+        if (!Number.isInteger(size) || atlas.height !== size * 4) {
+          throw new Error(`Isometric dual-grid 图集必须是 4×4 个 2:1 地块；当前为 ${atlas.width}×${atlas.height}。`);
+        }
+        return { tileSize: size, tileWidth: size * 2, tileHeight: size };
+      }
+      return null;
+    };
+
+    const projectedCellSize = (fallback = TILE_SIZE) => (
+      elements.mode.value === "hd-hex-isometric" ? layout.hdHexMetrics().side : fallback
+    );
+    const rawCenter = (column, row, tileSize = TILE_SIZE) => {
+      if (elements.mode.value === "hd-hex-isometric") return layout.hdHexCenter(column, row);
+      return isHexMode()
+        ? layout.hexCenter(column, row, { tileSize })
+        : layout.isometricCenter(column, row, { tileSize });
+    };
+    const tileDrawSize = (tile) => {
+      if (elements.mode.value === "hd-isometric") {
+        const footprint = normalizedFootprint(tile);
+        const scale = layout.hdIsometricAssetScale(tile.width, Math.max(footprint.width, footprint.height));
+        return { width: tile.width * scale, height: tile.height * scale, scale };
+      }
+      if (elements.mode.value === "hd-hex-isometric") {
+        const scale = layout.HD_HEX_DISPLAY_SCALE;
+        return { width: tile.width * scale, height: tile.height * scale, scale };
+      }
+      return { width: tile.width, height: tile.height, scale: 1 };
+    };
+
+    const buildGeometry = () => {
+      const { columns, rows } = dimensions();
+      let atlas = null;
+      try { atlas = atlasMetrics(); } catch (error) { return { error }; }
+      if (elements.mode.value === "dual-grid") {
+        const size = atlas?.tileSize || TILE_SIZE;
+        const cells = [];
+        for (let row = 0; row <= rows; row += 1) {
+          for (let column = 0; column <= columns; column += 1) {
+            cells.push({ column, row, center: { x: column * size, y: row * size }, width: size, height: size });
+          }
+        }
+        return { cells, bounds: layout.centeredImageBounds(cells, PADDING), atlas };
+      }
+
+      const displayColumns = elements.mode.value === "iso-dual-grid" ? columns + 1 : columns;
+      const displayRows = elements.mode.value === "iso-dual-grid" ? rows + 1 : rows;
+      const size = projectedCellSize(atlas?.tileSize || TILE_SIZE);
+      const fallback = isHexMode() ? { width: size * 2, height: size * 2 } : { width: size * 2, height: size };
+      const projectedSizes = isProjected() ? state.images.map(tileDrawSize) : [];
+      const projectedWidths = projectedSizes.map((item) => item.width);
+      const projectedHeights = projectedSizes.map((item) => item.height);
+      const maxWidth = Math.max(fallback.width, ...projectedWidths);
+      const maxHeight = Math.max(fallback.height, ...projectedHeights);
+      const cells = [];
+      for (let row = 0; row < displayRows; row += 1) {
+        for (let column = 0; column < displayColumns; column += 1) {
+          cells.push({ column, row, center: rawCenter(column, row, size), width: maxWidth, height: maxHeight });
+        }
+      }
+      return { cells, bounds: layout.centeredImageBounds(cells, PADDING), atlas };
+    };
+
+    const shiftedCenter = (cell, bounds) => ({ x: cell.center.x + bounds.offsetX, y: cell.center.y + bounds.offsetY });
+    const diamondPoints = (center, size) => ([
+      [center.x, center.y - size / 2], [center.x + size, center.y],
+      [center.x, center.y + size / 2], [center.x - size, center.y],
+    ]);
+    const hexPoints = (center, size) => ([
+      [center.x, center.y - size], [center.x + size - 1, center.y - size / 2],
+      [center.x + size - 1, center.y + size / 2], [center.x, center.y + size],
+      [center.x - size, center.y + size / 2], [center.x - size, center.y - size / 2],
+    ]);
+    const addGridPolygon = (edges, points) => {
+      points.forEach((point, index) => {
+        const next = points[(index + 1) % points.length];
+        const start = [Math.round(point[0]), Math.round(point[1])];
+        const end = [Math.round(next[0]), Math.round(next[1])];
+        const startKey = `${start[0]},${start[1]}`;
+        const endKey = `${end[0]},${end[1]}`;
+        const key = startKey < endKey ? `${startKey}|${endKey}` : `${endKey}|${startKey}`;
+        if (!edges.has(key)) edges.set(key, { start, end });
+      });
+    };
+    const drawPixelDottedEdges = (ctx, edges) => {
+      ctx.save();
+      ctx.fillStyle = "rgba(71, 85, 105, 0.2)";
+      edges.forEach(({ start, end }) => {
+        const dx = end[0] - start[0];
+        const dy = end[1] - start[1];
+        const length = Math.hypot(dx, dy);
+        for (let distance = 4; distance < length - 3; distance += 8) {
+          const ratio = distance / length;
+          ctx.fillRect(
+            Math.round(start[0] + dx * ratio),
+            Math.round(start[1] + dy * ratio),
+            1,
+            1,
+          );
+        }
+      });
+      ctx.restore();
+    };
+
+    const projectedRenderItems = (geometry) => {
+      const { columns, rows } = dimensions();
+      return geometry.cells.flatMap((cell) => {
+        const placement = state.cells[cell.row]?.[cell.column];
+        if (placement && typeof placement === "object"
+          && (placement.anchorColumn !== cell.column || placement.anchorRow !== cell.row)) return [];
+        const id = typeof placement === "string" ? placement : placement?.tileId;
+        const tile = state.images.find((item) => item.id === id);
+        if (!tile || cell.column >= columns) return [];
+        const footprint = normalizedFootprint(tile);
+        const baseCenter = shiftedCenter(cell, geometry.bounds);
+        const size = projectedCellSize(TILE_SIZE);
+        const center = isHexMode() ? baseCenter : {
+          x: baseCenter.x + ((footprint.width - footprint.height) * size * 0.5),
+          y: baseCenter.y + ((footprint.width + footprint.height - 2) * (size / 2) * 0.5),
+        };
+        const drawSize = tileDrawSize(tile);
+        const topLeft = layout.centerImageAt(drawSize.width, drawSize.height, center);
+        return [{
+          cell,
+          tile,
+          drawSize,
+          topLeft,
+          tiles: footprintOffsets(tile, cell.row).map(([columnOffset, rowOffset]) => ({
+            column: cell.column + columnOffset,
+            row: cell.row + rowOffset,
+          })),
+          screenBounds: {
+            left: topLeft.x,
+            top: topLeft.y,
+            right: topLeft.x + drawSize.width,
+            bottom: topLeft.y + drawSize.height,
+          },
+          sortIndex: cell.column * rows + cell.row,
+        }];
+      });
+    };
+
+    const drawProjected = (ctx, geometry) => {
+      const renderItems = projectedRenderItems(geometry);
+      const ordered = isHexMode()
+        ? renderItems.sort((a, b) => a.cell.row - b.cell.row || a.cell.column - b.cell.column)
+        : layout.sortIsometricDepthItems(renderItems);
+      ordered.forEach(({ tile, drawSize, topLeft }) => {
+        ctx.drawImage(tile.image, topLeft.x, topLeft.y, drawSize.width, drawSize.height);
+      });
+    };
+
+    const drawDualGrid = (ctx, geometry) => {
+      const atlas = state.images[0];
+      if (!atlas || !geometry.atlas) return;
+      const { tileWidth, tileHeight } = geometry.atlas;
+      const ordered = elements.mode.value === "iso-dual-grid"
+        ? [...geometry.cells].sort((a, b) => (a.column + a.row) - (b.column + b.row) || a.row - b.row)
+        : geometry.cells;
+      ordered.forEach((cell) => {
+        const key = layout.dualGridTileKeyAt(isFilled, cell.column, cell.row);
+        const [atlasX, atlasY] = layout.DUAL_GRID_ATLAS_BY_KEY[key];
+        const center = shiftedCenter(cell, geometry.bounds);
+        ctx.drawImage(
+          atlas.image,
+          atlasX * tileWidth, atlasY * tileHeight, tileWidth, tileHeight,
+          Math.round(center.x - tileWidth / 2), Math.round(center.y - tileHeight / 2), tileWidth, tileHeight,
+        );
+      });
+    };
+
+    const drawGrid = (ctx, geometry) => {
+      if (!elements.grid.checked) return;
+      const { columns, rows } = dimensions();
+      const size = projectedCellSize(geometry.atlas?.tileSize || TILE_SIZE);
+      const edges = new Map();
+      if (elements.mode.value === "dual-grid") {
+        for (let row = 0; row < rows; row += 1) {
+          for (let column = 0; column < columns; column += 1) {
+            if (isFilled(column, row)) continue;
+            const x = geometry.bounds.offsetX + column * size;
+            const y = geometry.bounds.offsetY + row * size;
+            addGridPolygon(edges, [
+              [x + 3, y + 3], [x + size - 3, y + 3],
+              [x + size - 3, y + size - 3], [x + 3, y + size - 3],
+            ]);
+          }
+        }
+      } else if (elements.mode.value === "iso-dual-grid") {
+        for (let row = 0; row < rows; row += 1) {
+          for (let column = 0; column < columns; column += 1) {
+            if (isFilled(column, row)) continue;
+            const center = rawCenter(column, row, size);
+            addGridPolygon(edges, diamondPoints(
+              { x: center.x + geometry.bounds.offsetX, y: center.y + geometry.bounds.offsetY + size / 2 },
+              size - 4,
+            ));
+          }
+        }
+      } else {
+        geometry.cells.forEach((cell) => {
+          if (isFilled(cell.column, cell.row)) return;
+          const center = shiftedCenter(cell, geometry.bounds);
+          addGridPolygon(edges, isHexMode()
+            ? hexPoints(center, size)
+            : diamondPoints(center, size));
+        });
+      }
+      drawPixelDottedEdges(ctx, edges);
+    };
+
+    const render = () => {
+      const geometry = buildGeometry();
+      if (geometry.error) {
+        elements.map.width = 1; elements.map.height = 1; elements.export.disabled = true;
+        setStatus(geometry.error.message, true); return;
+      }
+      const { width, height } = geometry.bounds;
+      const zoom = integerZoom(elements.zoom.value);
+      elements.zoom.value = String(zoom);
+      const backingScale = isHdMode() ? hdBackingScale(zoom) : 1;
+      const backingWidth = Math.ceil(width * backingScale);
+      const backingHeight = Math.ceil(height * backingScale);
+      if (backingWidth > MAX_CANVAS_EDGE || backingHeight > MAX_CANVAS_EDGE
+        || backingWidth * backingHeight > MAX_CANVAS_PIXELS) {
+        elements.map.width = 1; elements.map.height = 1; elements.export.disabled = true;
+        setStatus("高清预览画布过大，请减少地图行列数或预览倍率。", true); return;
+      }
+      elements.map.width = backingWidth; elements.map.height = backingHeight;
+      elements.map.dataset.logicalWidth = String(width);
+      elements.map.dataset.logicalHeight = String(height);
+      elements.map.dataset.backingScale = String(backingScale);
+      const displayWidth = width * zoom;
+      const displayHeight = height * zoom;
+      elements.map.style.width = `${displayWidth}px`;
+      elements.map.style.height = `${displayHeight}px`;
+      elements.map.style.minWidth = `${displayWidth}px`;
+      elements.map.style.minHeight = `${displayHeight}px`;
+      const ctx = elements.map.getContext("2d");
+      configureCanvasSampling(elements.map, ctx, isHdMode());
+      ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      if (isProjected()) {
+        drawGrid(ctx, geometry);
+        drawProjected(ctx, geometry);
+      } else {
+        drawDualGrid(ctx, geometry);
+        drawGrid(ctx, geometry);
+      }
+      elements.export.disabled = state.images.length === 0;
+      const filled = state.cells.flat().filter((cell) => (
+        cell && (typeof cell !== "object" || (cell.columnOffset === 0 && cell.rowOffset === 0))
+      )).length;
+      const samplingLabel = isHdMode() ? "平滑高清" : "最近邻";
+      setStatus(state.images.length
+        ? `已加载 ${state.images.length} 张图片；地图中有 ${filled} 个地块锚点，逻辑画布 ${width}×${height}，${samplingLabel}预览 ${zoom}×${isHdMode() ? `，内部缓冲 ${backingWidth}×${backingHeight}` : ""}。`
+        : "请选择用户生成的 PNG 或 WebP。Isometric/Hex 可加载多张独立地块；dual-grid 模式加载一张 4×4 图集。");
+    };
+
+    const queueRender = () => {
+      if (state.renderQueued) return;
+      state.renderQueued = true;
+      requestAnimationFrame(() => { state.renderQueued = false; render(); });
+    };
+
+    const renderPalette = () => {
+      elements.paletteList.replaceChildren();
+      if (!state.images.length) {
+        const empty = document.createElement("p"); empty.textContent = "尚未加载图片。"; elements.paletteList.append(empty); return;
+      }
+      state.images.forEach((item) => {
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "palette-item";
+        button.classList.toggle("active", item.id === state.selectedId);
+        const thumbnail = document.createElement("canvas");
+        const thumbnailSize = 72;
+        const thumbnailBackingScale = isHdMode() ? screenPixelRatio() : 1;
+        thumbnail.className = "palette-thumb";
+        thumbnail.width = Math.ceil(thumbnailSize * thumbnailBackingScale);
+        thumbnail.height = Math.ceil(thumbnailSize * thumbnailBackingScale);
+        const thumbnailContext = thumbnail.getContext("2d");
+        configureCanvasSampling(thumbnail, thumbnailContext, isHdMode());
+        thumbnailContext.setTransform(thumbnailBackingScale, 0, 0, thumbnailBackingScale, 0, 0);
+        thumbnailContext.clearRect(0, 0, thumbnailSize, thumbnailSize);
+        const thumbnailScale = isHdMode()
+          ? Math.min(thumbnailSize / item.width, thumbnailSize / item.height)
+          : Math.max(1, Math.min(4,
+            Math.floor(thumbnailSize / item.width), Math.floor(thumbnailSize / item.height)));
+        const thumbnailWidth = item.width * thumbnailScale;
+        const thumbnailHeight = item.height * thumbnailScale;
+        thumbnailContext.drawImage(
+          item.image,
+          Math.round((thumbnailSize - thumbnailWidth) / 2),
+          Math.round((thumbnailSize - thumbnailHeight) / 2),
+          thumbnailWidth,
+          thumbnailHeight,
+        );
+        const copy = document.createElement("span"); copy.className = "palette-copy";
+        const name = document.createElement("strong"); name.textContent = item.name;
+        const footprint = normalizedFootprint(item);
+        const meta = document.createElement("span");
+        meta.textContent = `${item.width}×${item.height} · 占地 ${footprint.width}×${footprint.height}`;
+        copy.append(name, meta); button.append(thumbnail, copy);
+        button.addEventListener("click", () => { state.selectedId = item.id; renderPalette(); });
+        elements.paletteList.append(button);
+      });
+    };
+
+    const pointInPolygon = (point, polygon) => {
+      let inside = false;
+      for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+        const a = polygon[index]; const b = polygon[previous];
+        if (((a[1] > point.y) !== (b[1] > point.y))
+          && point.x < ((b[0] - a[0]) * (point.y - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+      }
+      return inside;
+    };
+
+    const cellFromPoint = (point, geometry) => {
+      const { columns, rows } = dimensions();
+      const size = projectedCellSize(geometry.atlas?.tileSize || TILE_SIZE);
+      const raw = { x: point.x - geometry.bounds.offsetX, y: point.y - geometry.bounds.offsetY };
+      if (elements.mode.value === "dual-grid") {
+        const column = Math.floor(raw.x / size); const row = Math.floor(raw.y / size);
+        return column >= 0 && row >= 0 && column < columns && row < rows ? { column, row } : null;
+      }
+      let best = null; let bestDistance = Number.POSITIVE_INFINITY;
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < columns; column += 1) {
+          const rawCellCenter = rawCenter(column, row, size);
+          const center = elements.mode.value === "iso-dual-grid"
+            ? { x: rawCellCenter.x, y: rawCellCenter.y + size / 2 }
+            : rawCellCenter;
+          const contains = isHexMode()
+            ? pointInPolygon(raw, hexPoints(center, size))
+            : Math.abs(raw.x - center.x) / size + Math.abs(raw.y - center.y) / (size / 2) <= 1;
+          const distance = (raw.x - center.x) ** 2 + (raw.y - center.y) ** 2;
+          if (contains && distance < bestDistance) { best = { column, row }; bestDistance = distance; }
+        }
+      }
+      return best;
+    };
+
+    const paintCell = (cell) => {
+      if (!cell) return;
+      if (state.tool === "paint" && isProjected() && !selectedImage()) {
+        setStatus("请先从右侧选择一个地块。", true); return;
+      }
+      const value = state.tool === "paint" ? (isProjected() ? state.selectedId : true) : (isProjected() ? null : false);
+      const key = `${cell.column}:${cell.row}:${value}`;
+      if (key === state.lastCell) return;
+      state.lastCell = key;
+      if (isProjected()) {
+        if (state.tool === "paint") placeTileAt(cell.column, cell.row, selectedImage());
+        else clearPlacementAt(cell.column, cell.row);
+      } else {
+        state.cells[cell.row][cell.column] = value;
+      }
+      queueRender();
+    };
+
+    const pointerCell = (event) => {
+      const rect = elements.map.getBoundingClientRect();
+      const logicalWidth = Number(elements.map.dataset.logicalWidth) || elements.map.width;
+      const logicalHeight = Number(elements.map.dataset.logicalHeight) || elements.map.height;
+      const point = {
+        x: (event.clientX - rect.left) * logicalWidth / rect.width,
+        y: (event.clientY - rect.top) * logicalHeight / rect.height,
+      };
+      const geometry = buildGeometry();
+      return geometry.error ? null : cellFromPoint(point, geometry);
+    };
+
+    const setTool = (tool) => {
+      state.tool = tool;
+      elements.paint.classList.toggle("active", tool === "paint");
+      elements.erase.classList.toggle("active", tool === "erase");
+    };
+
+    const isSideMode = () => elements.mode.value === "side-scrolling";
+    const updateModeUI = () => {
+      const side = isSideMode();
+      document.body.classList.toggle("side-mode", side);
+      document.querySelectorAll(".tile-only").forEach((element) => { element.style.display = side ? "none" : ""; });
+      document.querySelectorAll(".side-only").forEach((element) => {
+        element.style.display = side
+          ? (element.classList.contains("workspace") || element.tagName === "LABEL" ? "grid" : "inline-block")
+          : "none";
+      });
+      sideState.active = side;
+      elements.images.accept = "image/png,image/webp";
+      elements.images.multiple = true;
+      if (side) {
+        renderSide();
+        if (sideState.layers.length) {
+          const { width, height } = sideState.layers[0];
+          setStatus(`已加载 3 个横版图层，原始画布 ${width}×${height}；方向键移动猫猫，空格跳跃。`);
+          elements.sideCanvas.focus({ preventScroll: true });
+        } else {
+          setStatus("请选择 background、midground、foreground 三张 PNG 或 WebP，或通过本地后端自动载入。", false);
+        }
+      }
+    };
+    const releaseSideAssets = () => {
+      sideState.layers.forEach((layer) => { if (layer.url) URL.revokeObjectURL(layer.url); });
+      if (sideState.player?.url) URL.revokeObjectURL(sideState.player.url);
+      sideState.layers = []; sideState.player = null; sideState.playerX = null; sideState.playerY = null;
+      sideState.drag = null; sideState.keys.clear();
+    };
+    const sidePlayerBounds = () => {
+      if (!sideState.player) return { width: 32, height: 48 };
+      return { width: sideState.player.width / sideState.player.frames * 4, height: sideState.player.height * 4 };
+    };
+    const applySideCanvasSize = () => {
+      if (sideState.layers.length !== 3) return;
+      const [{ width, height }] = sideState.layers;
+      const mismatch = sideState.layers.find((layer) => layer.width !== width || layer.height !== height);
+      if (mismatch) throw new Error(`三个横版图层必须使用同一画布；${mismatch.name} 为 ${mismatch.width}×${mismatch.height}，期望 ${width}×${height}。`);
+      if (width > MAX_CANVAS_EDGE || height > MAX_CANVAS_EDGE || width * height > MAX_CANVAS_PIXELS) throw new Error("横版图层画布超出安全预览上限。");
+      elements.sideCanvas.width = width; elements.sideCanvas.height = height;
+      const zoom = integerZoom(elements.zoom.value); elements.zoom.value = String(zoom);
+      elements.sideCanvas.style.width = `${width * zoom}px`; elements.sideCanvas.style.height = `${height * zoom}px`;
+      elements.sideCanvas.style.minWidth = `${width * zoom}px`; elements.sideCanvas.style.minHeight = `${height * zoom}px`;
+      const playerSize = sidePlayerBounds();
+      sideState.playerX = sideState.playerX ?? Math.max(0, Math.round((width - playerSize.width) / 2));
+      sideState.playerY = sideState.playerY ?? Math.max(0, height - playerSize.height - 24);
+      elements.sideExport.disabled = false;
+    };
+    const drawSideWrapped = (ctx, layer) => {
+      if (!layer.visible) return;
+      const offset = ((-sideState.scroll * layer.speed) % layer.width + layer.width) % layer.width;
+      for (let x = offset - layer.width; x < elements.sideCanvas.width; x += layer.width) {
+        ctx.drawImage(layer.image, Math.round(x), Math.round(layer.offsetY));
+      }
+    };
+    const drawSidePlayer = (ctx, timestamp) => {
+      if (!sideState.player) return;
+      const frameWidth = sideState.player.width / sideState.player.frames;
+      const frame = Math.floor(timestamp / 500) % sideState.player.frames;
+      const outputWidth = frameWidth * 4; const outputHeight = sideState.player.height * 4;
+      const x = Math.round(sideState.playerX); const y = Math.round(sideState.playerY);
+      ctx.save();
+      if (sideState.playerDirection < 0) { ctx.translate(x + outputWidth, y); ctx.scale(-1, 1); }
+      else ctx.translate(x, y);
+      ctx.drawImage(sideState.player.image, frame * frameWidth, 0, frameWidth, sideState.player.height, 0, 0, outputWidth, outputHeight);
+      ctx.restore();
+    };
+    const renderSide = (timestamp = performance.now()) => {
+      if (sideState.layers.length !== 3) return;
+      const ctx = elements.sideCanvas.getContext("2d"); configureCanvasSampling(elements.sideCanvas, ctx, false);
+      ctx.clearRect(0, 0, elements.sideCanvas.width, elements.sideCanvas.height);
+      sideState.layers.forEach((layer) => drawSideWrapped(ctx, layer));
+      drawSidePlayer(ctx, timestamp);
+      elements.sideCanvas.dataset.playerX = String(Math.round(sideState.playerX));
+    };
+    const updateSidePlayer = (deltaSeconds) => {
+      if (!sideState.active || sideState.layers.length !== 3 || sideState.drag?.kind === "player") return;
+      const bounds = sidePlayerBounds();
+      if (sideState.keys.has("ArrowLeft")) { sideState.playerX -= 240 * deltaSeconds; sideState.playerDirection = -1; }
+      if (sideState.keys.has("ArrowRight")) { sideState.playerX += 240 * deltaSeconds; sideState.playerDirection = 1; }
+      const ground = elements.sideCanvas.height - bounds.height - 24;
+      sideState.playerVelocityY += 600 * deltaSeconds;
+      sideState.playerY = Math.min(ground, sideState.playerY + sideState.playerVelocityY * deltaSeconds);
+      if (sideState.playerY >= ground) { sideState.playerY = ground; sideState.playerVelocityY = 0; }
+      sideState.playerX = Math.max(0, Math.min(elements.sideCanvas.width - bounds.width, sideState.playerX));
+    };
+    const moveSidePlayerImmediately = (direction) => {
+      const bounds = sidePlayerBounds(); sideState.playerDirection = direction;
+      sideState.playerX = Math.max(0, Math.min(elements.sideCanvas.width - bounds.width, sideState.playerX + direction * 16));
+      renderSide();
+    };
+    const animateSide = (timestamp) => {
+      const deltaSeconds = Math.min((timestamp - (sideState.lastTime || timestamp)) / 1000, .1); sideState.lastTime = timestamp;
+      if (sideState.active && sideState.playing) sideState.scroll += Math.max(0, Number(elements.sideSpeed.value) || 0) * deltaSeconds;
+      updateSidePlayer(deltaSeconds);
+      if (sideState.active && (sideState.playing || sideState.keys.size || sideState.playerVelocityY !== 0)) renderSide(timestamp);
+      requestAnimationFrame(animateSide);
+    };
+    const selectSideLayer = (role) => {
+      sideState.selectedLayerRole = role;
+      elements.sideLayerList.querySelectorAll(".side-layer-card").forEach((card) => card.classList.toggle("selected", card.dataset.role === role));
+    };
+    const renderSideLayerCards = () => {
+      elements.sideLayerList.replaceChildren();
+      sideState.layers.forEach((layer) => {
+        const card = document.createElement("section"); card.className = "side-layer-card"; card.dataset.role = layer.role;
+        card.classList.toggle("selected", layer.role === sideState.selectedLayerRole);
+        card.addEventListener("click", (event) => { if (!(event.target instanceof HTMLInputElement)) selectSideLayer(layer.role); });
+        const head = document.createElement("div"); head.className = "side-layer-head";
+        const thumb = document.createElement("canvas"); thumb.className = "side-layer-thumb"; thumb.width = 320; thumb.height = 160;
+        const thumbCtx = thumb.getContext("2d"); configureCanvasSampling(thumb, thumbCtx, false);
+        const scale = Math.min(thumb.width / layer.width, thumb.height / layer.height);
+        const width = Math.max(1, Math.round(layer.width * scale)); const height = Math.max(1, Math.round(layer.height * scale));
+        thumbCtx.drawImage(layer.image, Math.round((thumb.width - width) / 2), Math.round((thumb.height - height) / 2), width, height);
+        const copy = document.createElement("div"); copy.className = "side-layer-copy";
+        const title = document.createElement("strong"); title.textContent = layer.role;
+        const meta = document.createElement("span"); meta.textContent = `${layer.name} · ${layer.width}×${layer.height}`;
+        copy.append(title, meta); head.append(thumb, copy);
+        const fields = document.createElement("div"); fields.className = "side-layer-fields";
+        const offsetLabel = document.createElement("label"); offsetLabel.textContent = "Y 偏移";
+        const offset = document.createElement("input"); offset.type = "number"; offset.min = "-8192"; offset.max = "8192"; offset.value = String(layer.offsetY);
+        offset.addEventListener("input", () => { layer.offsetY = Math.max(-8192, Math.min(8192, Number(offset.value) || 0)); renderSide(); }); layer.offsetInput = offset; offsetLabel.append(offset);
+        const speedLabel = document.createElement("label"); speedLabel.textContent = "相对速度";
+        const speed = document.createElement("input"); speed.type = "number"; speed.min = "0"; speed.max = "4"; speed.step = ".05"; speed.value = String(layer.speed);
+        speed.addEventListener("input", () => { layer.speed = Math.max(0, Math.min(4, Number(speed.value) || 0)); renderSide(); }); speedLabel.append(speed);
+        fields.append(offsetLabel, speedLabel);
+        const visibleLabel = document.createElement("label"); visibleLabel.className = "side-visible-toggle";
+        const visible = document.createElement("input"); visible.type = "checkbox"; visible.checked = layer.visible;
+        visible.addEventListener("change", () => { layer.visible = visible.checked; renderSide(); }); visibleLabel.append(visible, "显示此图层");
+        card.append(head, fields, visibleLabel); elements.sideLayerList.append(card);
+      });
+    };
+    const useSideLayers = (layers, player) => {
+      releaseSideAssets(); sideState.layers = layers; sideState.player = player; sideState.selectedLayerRole = "foreground";
+      applySideCanvasSize(); renderSideLayerCards(); renderSide(); updateModeUI();
+    };
+    const decodeBuiltInCat = async () => {
+      const decoded = await decodePreloadedImage({ name: "内置猫猫 · walk.png", src: BUILT_IN_CAT_SRC }, 999);
+      return { ...decoded, frames: 4 };
+    };
+    const loadSideConfig = async (preload) => {
+      if (!Array.isArray(preload.layers) || preload.layers.length !== 3) return;
+      const layers = await Promise.all(preload.layers.map(async (item, index) => {
+        const decoded = await decodePreloadedImage(item, index);
+        const role = item.name;
+        return { ...decoded, role, offsetY: Number(item.offsetY) || 0, speed: ({ background: .15, midground: .45, foreground: 1 })[role], visible: true };
+      }));
+      let player = await decodeBuiltInCat();
+      if (preload.player?.src) {
+        const decoded = await decodePreloadedImage(preload.player, 998); player = { ...decoded, frames: Number(preload.player.frames) || 4 };
+      }
+      useSideLayers(layers, player);
+    };
+
+    elements.images.addEventListener("change", async () => {
+      try {
+        const files = [...elements.images.files];
+        const loaded = await Promise.all(files.map(decodeImage));
+        if (isSideMode()) {
+          const byRole = Object.fromEntries(loaded.map((item) => [item.name.replace(/\.(png|webp)$/i, "").toLowerCase(), item]));
+          const layers = ["background", "midground", "foreground"].map((role) => {
+            const item = byRole[role];
+            if (!item) throw new Error(`请选择名为 ${role}.png 或 ${role}.webp 的文件。`);
+            return { ...item, role, offsetY: 0, speed: ({ background: .15, midground: .45, foreground: 1 })[role], visible: true };
+          });
+          useSideLayers(layers, await decodeBuiltInCat());
+          return;
+        }
+        useLoadedImages(loaded);
+      } catch (error) { setStatus(error.message || "图片读取失败。", true); }
+    });
+
+    elements.mode.addEventListener("change", () => {
+      updateModeUI();
+      if (!isSideMode()) activateModeLibrary();
+    });
+    [elements.columns, elements.rows].forEach((input) => input.addEventListener("change", () => { resizeCells(); render(); }));
+    elements.zoom.addEventListener("change", () => {
+      if (isSideMode()) { applySideCanvasSize(); renderSide(); }
+      else render();
+    });
+    elements.grid.addEventListener("change", render);
+    elements.paint.addEventListener("click", () => setTool("paint"));
+    elements.erase.addEventListener("click", () => setTool("erase"));
+    elements.clear.addEventListener("click", () => { resetCells(); render(); });
+    elements.fill.addEventListener("click", () => {
+      if (isProjected() && !selectedImage()) { setStatus("请先选择一个地块。", true); return; }
+      if (isProjected()) {
+        resetCells();
+        const { columns, rows } = dimensions();
+        for (let row = 0; row < rows; row += 1) {
+          for (let column = 0; column < columns; column += 1) {
+            if (!state.cells[row][column]) placeTileAt(column, row, selectedImage());
+          }
+        }
+      } else {
+        state.cells = state.cells.map((row) => row.map(() => true));
+      }
+      render();
+    });
+    elements.removeImages.addEventListener("click", () => { releaseImages(); renderPalette(); render(); });
+    elements.map.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      state.pointerDown = true; state.lastCell = ""; elements.map.setPointerCapture(event.pointerId); paintCell(pointerCell(event));
+    });
+    elements.map.addEventListener("pointermove", (event) => { if (state.pointerDown && (event.buttons & 1)) paintCell(pointerCell(event)); });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((name) => elements.map.addEventListener(name, () => { state.pointerDown = false; state.lastCell = ""; }));
+    elements.export.addEventListener("click", () => {
+      elements.map.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob); const link = document.createElement("a");
+        link.href = url; link.download = `meowa-${elements.mode.value}-map-preview.png`; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }, "image/png");
+    });
+
+    elements.sidePlay.addEventListener("click", () => {
+      sideState.playing = !sideState.playing;
+      elements.sidePlay.textContent = sideState.playing ? "暂停" : "播放";
+      elements.sidePlay.classList.toggle("active", sideState.playing);
+    });
+    elements.sideReset.addEventListener("click", () => {
+      sideState.scroll = 0; sideState.playerX = null; sideState.playerY = null; sideState.playerVelocityY = 0;
+      applySideCanvasSize(); renderSide();
+    });
+    elements.sideExport.addEventListener("click", () => {
+      renderSide(); elements.sideCanvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob); const link = document.createElement("a");
+        link.href = url; link.download = "meowa-side-scrolling-preview.png"; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }, "image/png");
+    });
+    const sideControlKey = (event) => {
+      if (["ArrowLeft", "ArrowRight", "Space"].includes(event.code)) return event.code;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") return event.key;
+      return event.key === " " ? "Space" : "";
+    };
+    window.addEventListener("keydown", (event) => {
+      if (!sideState.active) return;
+      const key = sideControlKey(event); if (!key) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+      event.preventDefault();
+      if ((key === "ArrowLeft" || key === "ArrowRight") && !event.repeat && !sideState.keys.has(key)) {
+        moveSidePlayerImmediately(key === "ArrowLeft" ? -1 : 1);
+      }
+      sideState.keys.add(key);
+      if (key === "Space" && sideState.playerVelocityY === 0) sideState.playerVelocityY = -320;
+    });
+    window.addEventListener("keyup", (event) => sideState.keys.delete(sideControlKey(event)));
+    window.addEventListener("blur", () => sideState.keys.clear());
+    const sidePointer = (event) => {
+      const rect = elements.sideCanvas.getBoundingClientRect(); const zoom = integerZoom(elements.zoom.value);
+      return { x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom };
+    };
+    elements.sideCanvas.addEventListener("pointerdown", (event) => {
+      if (!sideState.active || sideState.layers.length !== 3 || event.button !== 0) return;
+      elements.sideCanvas.focus({ preventScroll: true });
+      const point = sidePointer(event); const bounds = sidePlayerBounds();
+      const hitPlayer = point.x >= sideState.playerX && point.x <= sideState.playerX + bounds.width
+        && point.y >= sideState.playerY && point.y <= sideState.playerY + bounds.height;
+      if (hitPlayer) sideState.drag = { kind: "player", offsetX: point.x - sideState.playerX, offsetY: point.y - sideState.playerY };
+      else {
+        const layer = sideState.layers.find((item) => item.role === sideState.selectedLayerRole); if (!layer) return;
+        sideState.drag = { kind: "layer", role: layer.role, startY: point.y, startOffsetY: layer.offsetY };
+      }
+      elements.sideCanvas.classList.add("dragging"); elements.sideCanvas.setPointerCapture(event.pointerId);
+    });
+    elements.sideCanvas.addEventListener("pointermove", (event) => {
+      if (!sideState.drag) return;
+      const point = sidePointer(event);
+      if (sideState.drag.kind === "player") {
+        const bounds = sidePlayerBounds();
+        sideState.playerX = Math.max(0, Math.min(elements.sideCanvas.width - bounds.width, point.x - sideState.drag.offsetX));
+        sideState.playerY = Math.max(0, Math.min(elements.sideCanvas.height - bounds.height, point.y - sideState.drag.offsetY));
+      } else {
+        const layer = sideState.layers.find((item) => item.role === sideState.drag.role); if (!layer) return;
+        layer.offsetY = Math.max(-8192, Math.min(8192, Math.round(sideState.drag.startOffsetY + point.y - sideState.drag.startY)));
+        if (layer.offsetInput) layer.offsetInput.value = String(layer.offsetY);
+      }
+      renderSide();
+    });
+    ["pointerup", "pointercancel"].forEach((name) => elements.sideCanvas.addEventListener(name, (event) => {
+      if (sideState.drag) elements.sideCanvas.releasePointerCapture?.(event.pointerId);
+      sideState.drag = null; elements.sideCanvas.classList.remove("dragging");
+    }));
+
+    const initialize = async () => {
+      resetCells();
+      renderPalette();
+      render();
+      try {
+        const preloadElement = document.querySelector("#meowa-map-preload");
+        const embedded = JSON.parse(preloadElement?.textContent || "{}");
+        let preload = embedded;
+        if ((!Array.isArray(embedded.images) || !embedded.images.length)
+          && ["http:", "https:"].includes(window.location.protocol)) {
+          const response = await fetch(new URL("api/config", window.location.href), {
+            cache: "no-store",
+            credentials: "same-origin",
+          });
+          if (response.ok) preload = await response.json();
+        }
+        if (["isometric", "hex", "hd-isometric", "hd-hex-isometric", "dual-grid", "iso-dual-grid", "side-scrolling"].includes(preload.mode)) {
+          elements.mode.value = preload.mode;
+        }
+        elements.columns.value = String(clampInteger(preload.columns, 2, 32, 8));
+        elements.rows.value = String(clampInteger(preload.rows, 2, 32, 6));
+        elements.zoom.value = String(integerZoom(preload.zoom));
+        elements.grid.checked = preload.grid !== false;
+        if (preload.libraries && typeof preload.libraries === "object") {
+          const entries = Object.entries(preload.libraries).filter(([mode, images]) => (
+            ["isometric", "hex", "hd-isometric", "hd-hex-isometric", "dual-grid", "iso-dual-grid"].includes(mode)
+              && Array.isArray(images) && images.length
+          ));
+          const decoded = await Promise.all(entries.map(async ([mode, images]) => (
+            [mode, await Promise.all(images.map(decodePreloadedImage))]
+          )));
+          state.libraries = Object.fromEntries(decoded);
+        }
+        await loadSideConfig(preload);
+        if (Array.isArray(preload.images) && preload.images.length && !preload.libraries) {
+          const loaded = await Promise.all(preload.images.map(decodePreloadedImage));
+          if (!isSideMode()) useLoadedImages(loaded);
+        }
+        updateModeUI();
+        if (!isSideMode() && state.libraries[elements.mode.value]) activateModeLibrary();
+      } catch (error) {
+        setStatus(error.message || "自动预览数据读取失败。", true);
+      }
+      requestAnimationFrame(animateSide);
+    };
+
+    initialize();
+  </script>
+</body>
+</html>

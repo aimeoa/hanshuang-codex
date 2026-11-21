@@ -126,3 +126,24 @@ MIT — 见 [LICENSE](LICENSE)
 -------------
 
 打扰了，谢谢看到这里。
+
+## DSH 懒人包模式（`dsh-lazy-pack-v5/`）
+
+`install-dsh.ps1` 在 DeepSeek Harness 目标页有两条路：
+
+- **单文件版**（默认）：提示词取 `memory/破甲记忆.md`，技能取 `seep-kit/Tool/skill`。
+- **懒人包版**：只要在同级 / 上级 / 上上级目录（或环境变量 `HS_DSH_KIT`）找到
+  `dsh-lazy-pack-v5/materials/AGENTS.md`，自动切到本模式 —— 提示词取
+  `materials/AGENTS.md`（SHIYI-DSH v5.2 工作约定版），`materials/shield-protocol.md`
+  落 `~/.dsh/shield-protocol.md`（插件读盘、改完即生效），
+  `prompts/operator-config-v5.md` 落 `~/.dsh/prompt-inject.md` 并注册进
+  `~/.dsh/dsh-prompt-inject.json` 模板库，技能取 `materials/skills`（150 个）。
+  `AGENTS.md` 的注入块带 `pack=dsh-lazy-pack-v5` 标记，卸载按标记整段摘除。
+
+懒人包已进 `extraResources`，打包后落在 `resources/dsh-lazy-pack-v5/`，打包版同样命中本模式。
+包内自带的独立安装器 `dsh-lazy-pack-v5/install.ps1` 多出插件安装与 dsh-purge 清洗
+（插件源不随本仓库分发，缺 `plugins/` 时那一步会跳过并告警）。
+
+> 约束：`materials/skills/**/SKILL.md` 必须以 `---` frontmatter 开头。DSH 的技能发现按首行判定，
+> frontmatter 之前出现任何文本（包括中转站保护条款）该技能会被直接拒收。
+
