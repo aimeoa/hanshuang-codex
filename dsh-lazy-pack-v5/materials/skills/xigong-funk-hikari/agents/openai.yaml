@@ -1,0 +1,4 @@
+interface:
+  display_name: "西宫-FUNK-Hikari"
+  short_description: "Hikari-LLVM 深度反混淆、明文物化与可运行交付"
+  default_prompt: "使用 $xigong-funk-hikari 对当前 Hikari-LLVM 样本完成识别、分层反混淆、运行期明文化、可运行封装与五轴回归。"

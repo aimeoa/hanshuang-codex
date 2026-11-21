@@ -1,0 +1,7 @@
+interface:
+  display_name: "影安脱修"
+  short_description: "影安/YingPo APK 壳还原、运行时 DEX 恢复与稳定重建"
+  default_prompt: "Use $yingan-tuoxiu to recover and rebuild this owner-authorized YingAn/YingPo-protected APK."
+
+policy:
+  allow_implicit_invocation: true
